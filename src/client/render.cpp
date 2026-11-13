@@ -8,6 +8,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "font.h"
 #include "game.h"
 #include "gl.h"
 #include "textures.h"
@@ -227,6 +228,7 @@ bool Renderer::init(int internalW, int internalH) {
     texStaff_ = makeTexture(makeStaffSprite(), false);
     texWhite_ = makeTexture(makeWhite(), false);
     texTorch_ = makeTexture(makeTorchSprite(), false);
+    texFont_ = makeTexture(makeFontAtlas(), false);
 
     buildLevel();
 
@@ -389,6 +391,28 @@ void Renderer::drawQuad(glm::vec3 tl, glm::vec3 tr, glm::vec3 br, glm::vec3 bl, 
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
+void Renderer::drawText(const HudText& t, glm::vec3 color, int dx, int dy) {
+    const float aw = static_cast<float>(FONT_COLS * FONT_CELL_W), ah = static_cast<float>(FONT_ROWS * FONT_CELL_H);
+    glUniform3f(uTint_, color.r, color.g, color.b);
+    float x = static_cast<float>(t.x + dx);
+    const float top = static_cast<float>(h_ - (t.y + dy));
+    std::vector<float> v;
+    v.reserve(t.text.size() * 6 * VERT_FLOATS);
+    for (char c : t.text) {
+        int cell = glyphIndex(c);
+        float u0 = (cell % FONT_COLS) * FONT_CELL_W / aw, v0 = (cell / FONT_COLS) * FONT_CELL_H / ah;
+        float u1 = u0 + GLYPH_W / aw, v1 = v0 + GLYPH_H / ah;
+        glm::vec3 p[4] = {{x, top, 0}, {x + GLYPH_W, top, 0}, {x + GLYPH_W, top - GLYPH_H, 0}, {x, top - GLYPH_H, 0}};
+        glm::vec2 uv[4] = {{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}};
+        addQuadUV(v, p, uv, 1.0f, glm::vec3(0));
+        x += GLYPH_ADVANCE;
+    }
+    // One draw per string: stream into a scratch buffer sized for it.
+    if (v.empty()) return;
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(v.size() * sizeof(float)), v.data(), GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(v.size() / VERT_FLOATS));
+}
+
 void Renderer::setEmissive(bool on, glm::vec3 color) {
     glUniform1i(uEmissive_, on ? 1 : 0);
     glUniform3f(uEmissiveColor_, color.r, color.g, color.b);
@@ -515,6 +539,31 @@ void Renderer::drawHud(const Hud& hud) {
         glDisable(GL_BLEND);
     }
 
+    // Panels and text (kill feed, scoreboard, messages).
+    if (!hud.rects.empty()) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBindTexture(GL_TEXTURE_2D, texWhite_);
+        setEmissive(true);
+        for (const HudRect& r : hud.rects) {
+            glUniform3f(uTint_, r.color.r, r.color.g, r.color.b);
+            glUniform1f(uAlpha_, r.color.a);
+            float x0 = static_cast<float>(r.x), x1 = static_cast<float>(r.x + r.w);
+            float y0 = static_cast<float>(h_ - r.y), y1 = static_cast<float>(h_ - r.y - r.h);
+            drawQuad({x0, y0, 0}, {x1, y0, 0}, {x1, y1, 0}, {x0, y1, 0}, 1.0f);
+        }
+        glUniform1f(uAlpha_, 1.0f);
+        glDisable(GL_BLEND);
+    }
+    if (!hud.texts.empty()) {
+        glBindTexture(GL_TEXTURE_2D, texFont_);
+        setEmissive(true);
+        for (const HudText& t : hud.texts) drawText(t, glm::vec3(0.02f), 1, 1);  // shadow
+        for (const HudText& t : hud.texts) drawText(t, t.color, 0, 0);
+        // Restore the sprite buffer's size for later single-quad draws.
+        glBufferData(GL_ARRAY_BUFFER, 6 * VERT_FLOATS * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    }
+
     // Pixel-exact HUD bits drawn with scissored clears.
     glEnable(GL_SCISSOR_TEST);
     int cx = w_ / 2, cy = h_ / 2;
@@ -576,7 +625,7 @@ bool Renderer::saveScreenshot(const char* path) {
 }
 
 void Renderer::shutdown() {
-    GLuint texs[] = {texWall_, texFloor_, texCeil_, texPlayer_, texOrb_, texSword_, texStaff_, texWhite_, texTorch_, fboColor_};
+    GLuint texs[] = {texWall_, texFloor_, texCeil_, texPlayer_, texOrb_, texSword_, texStaff_, texWhite_, texTorch_, texFont_, fboColor_};
     glDeleteTextures(sizeof(texs) / sizeof(texs[0]), texs);
     glDeleteRenderbuffers(1, &fboDepth_);
     glDeleteFramebuffers(1, &fbo_);

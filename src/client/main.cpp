@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "font.h"
 #include "game.h"
 #include "gl.h"
 #include "protocol.h"
@@ -197,6 +198,24 @@ struct Flash {  // light only, no sprite: spell casting at a staff
     float radius;
 };
 
+struct KillFeedEntry {
+    double t;
+    uint8_t killer, victim;
+    AbilityId ability;
+};
+
+struct CenterMessage {
+    std::string text;
+    glm::vec3 color;
+    double t0 = -100;
+    double duration = 0;
+};
+
+std::string upper(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return s;
+}
+
 struct WeaponPose {
     glm::vec2 offset{0};
     float angle = 0;
@@ -311,6 +330,12 @@ int main(int argc, char** argv) {
 
     std::map<uint8_t, Remote> remotes;
     std::map<uint8_t, std::string> names;
+    std::map<uint8_t, PlayerClass> classes;
+    std::deque<KillFeedEntry> killFeed;
+    CenterMessage centerMsg;
+    std::string killedByText;
+    double deathT = -1;
+    uint16_t myPing = 0;
     std::map<uint8_t, double> remoteAttackT, remoteHurtT;
     std::vector<std::pair<NetProjectile, double>> projectiles;  // latest snapshot + receive time
     std::vector<Burst> bursts;
@@ -363,6 +388,7 @@ int main(int argc, char** argv) {
                 // Reconcile: take server's authoritative state, then re-apply
                 // every input the server hasn't processed yet.
                 myHp = np.hp;
+                myPing = np.ping;
                 if (np.kills != myKills || np.deaths != myDeaths) {
                     myKills = np.kills;
                     myDeaths = np.deaths;
@@ -445,6 +471,16 @@ int main(int argc, char** argv) {
                     }
                     break;
                 case EV_KILL:
+                    killFeed.push_back({t, e.a, e.b, ab});
+                    while (killFeed.size() > 5) killFeed.pop_front();
+                    if (e.b == myId) {
+                        deathT = t;
+                        killedByText = (e.a == e.b || e.a == NO_PLAYER)
+                                           ? "YOU DIED"
+                                           : "KILLED BY " + upper(nameOf(e.a)) + " [" + upper(abilityInfo(ab).name) + "]";
+                    } else if (e.a == myId) {
+                        centerMsg = {"YOU KILLED " + upper(nameOf(e.b)), {1.0f, 0.85f, 0.3f}, t, 2.0};
+                    }
                     if (e.a == e.b || e.a == NO_PLAYER)
                         std::printf("  %s died\n", nameOf(e.b).c_str());
                     else
@@ -462,6 +498,7 @@ int main(int argc, char** argv) {
         std::memcpy(&m, d, sizeof m);
         m.name[sizeof(m.name) - 1] = 0;
         names[m.id] = m.name;
+        classes[m.id] = static_cast<PlayerClass>(m.cls);
         if (m.id != myId) {
             std::printf("  %s joined as %s\n", m.name, classInfo(static_cast<PlayerClass>(m.cls)).name);
             std::fflush(stdout);
@@ -692,6 +729,98 @@ int main(int argc, char** argv) {
         if (!alive) hud.flash = {0.35f, 0.0f, 0.0f, 0.55f};
         else if (hurtT >= 0 && t - hurtT < 0.3) hud.flash = {0.8f, 0.05f, 0.0f, 0.25f * static_cast<float>(1.0 - (t - hurtT) / 0.3)};
         else if (healT >= 0 && t - healT < 0.4) hud.flash = {0.3f, 1.0f, 0.4f, 0.2f * static_cast<float>(1.0 - (t - healT) / 0.4)};
+
+        // --- Text HUD: kill feed, centre messages, scoreboard ---
+        auto colorOf = [&](uint8_t id) {
+            auto it = classes.find(id);
+            return it != classes.end() ? classColor(it->second) : glm::vec3(0.8f);
+        };
+        auto text = [&](int x, int y, const std::string& s, glm::vec3 c) { hud.texts.push_back({x, y, s, c}); };
+        auto centered = [&](int y, const std::string& s, glm::vec3 c) { text((RETRO_W - textWidth(s)) / 2, y, s, c); };
+
+        // Kill feed (top right), newest at the bottom, entries expire after 6 s.
+        while (!killFeed.empty() && t - killFeed.front().t > 6.0) killFeed.pop_front();
+        {
+            int y = 4;
+            for (const KillFeedEntry& k : killFeed) {
+                bool suicide = k.killer == k.victim || k.killer == NO_PLAYER;
+                std::vector<std::pair<std::string, glm::vec3>> segs;
+                if (suicide) {
+                    segs = {{upper(nameOf(k.victim)), colorOf(k.victim)}, {" DIED", glm::vec3(0.7f)}};
+                } else {
+                    segs = {{upper(nameOf(k.killer)), colorOf(k.killer)},
+                            {" [" + upper(abilityInfo(k.ability).name) + "] ", abilityColor(k.ability) * 0.6f + 0.4f},
+                            {upper(nameOf(k.victim)), colorOf(k.victim)}};
+                }
+                int w = 0;
+                for (auto& sgm : segs) w += static_cast<int>(sgm.first.size()) * GLYPH_ADVANCE;
+                int x = RETRO_W - 4 - w;
+                bool involvesMe = k.killer == myId || k.victim == myId;
+                hud.rects.push_back({x - 3, y - 2, w + 4, LINE_HEIGHT + 1,
+                                     involvesMe ? glm::vec4(0.35f, 0.25f, 0.05f, 0.6f) : glm::vec4(0, 0, 0, 0.45f)});
+                for (auto& [s, c] : segs) {
+                    text(x, y, s, c);
+                    x += static_cast<int>(s.size()) * GLYPH_ADVANCE;
+                }
+                y += LINE_HEIGHT + 2;
+            }
+        }
+
+        // Centre messages.
+        if (haveServerState && !pred.alive && deathT >= 0) {
+            // Below the scoreboard, which opens automatically while dead.
+            centered(RETRO_H - 50, killedByText, {1.0f, 0.35f, 0.3f});
+            int secs = std::max(1, static_cast<int>(std::ceil(RESPAWN_TICKS * TICK_DT - (t - deathT))));
+            centered(RETRO_H - 39, "RESPAWN IN " + std::to_string(secs), glm::vec3(0.8f));
+        } else if (t - centerMsg.t0 < centerMsg.duration) {
+            centered(RETRO_H / 2 - 30, centerMsg.text, centerMsg.color);
+        }
+
+        // Scoreboard: hold Tab, or automatically while dead.
+        const bool* kb = SDL_GetKeyboardState(nullptr);
+        if (kb[SDL_SCANCODE_TAB] || (haveServerState && !pred.alive)) {
+            struct Row {
+                uint8_t id;
+                PlayerClass cls;
+                int kills, deaths, ping;
+            };
+            std::vector<Row> rows = {{myId, opt.cls, myKills, myDeaths, myPing}};
+            for (const auto& [id, r] : remotes) {
+                if (r.samples.empty()) continue;
+                const NetPlayer& np = r.samples.back().p;
+                rows.push_back({id, static_cast<PlayerClass>(np.cls), np.kills, np.deaths, np.ping});
+            }
+            std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+                return a.kills != b.kills ? a.kills > b.kills : a.deaths < b.deaths;
+            });
+            const int pw = 250, px = (RETRO_W - pw) / 2, py = 40;
+            const int rowH = LINE_HEIGHT + 2;
+            const int ph = 30 + static_cast<int>(rows.size()) * rowH;
+            hud.rects.push_back({px, py, pw, ph, {0.03f, 0.02f, 0.02f, 0.75f}});
+            hud.rects.push_back({px, py, pw, 14, {0.25f, 0.12f, 0.05f, 0.85f}});
+            text(px + 6, py + 4, upper(mapName()), {1.0f, 0.8f, 0.45f});
+            std::string count = std::to_string(rows.size()) + (rows.size() == 1 ? " PLAYER" : " PLAYERS");
+            text(px + pw - 6 - textWidth(count), py + 4, count, glm::vec3(0.75f));
+            const int cName = px + 6, cClass = px + 108, cK = px + 166, cD = px + 190, cPing = px + 214;
+            int y = py + 18;
+            const glm::vec3 headC(0.6f);
+            text(cName, y, "NAME", headC);
+            text(cClass, y, "CLASS", headC);
+            text(cK, y, "K", headC);
+            text(cD, y, "D", headC);
+            text(cPing, y, "PING", headC);
+            y += rowH;
+            for (const Row& r : rows) {
+                if (r.id == myId) hud.rects.push_back({px + 2, y - 2, pw - 4, rowH, glm::vec4(classColor(r.cls) * 0.35f, 0.6f)});
+                glm::vec3 c = r.id == myId ? glm::vec3(1.0f) : glm::vec3(0.85f);
+                text(cName, y, upper(nameOf(r.id)).substr(0, 16), c);
+                text(cClass, y, upper(classInfo(r.cls).name), classColor(r.cls));
+                text(cK, y, std::to_string(r.kills), c);
+                text(cD, y, std::to_string(r.deaths), c);
+                text(cPing, y, std::to_string(r.ping), r.ping > 150 ? glm::vec3(1.0f, 0.5f, 0.3f) : c);
+                y += rowH;
+            }
+        }
 
         renderer.renderFrame(cam, billboards, lights, hud);
         int ww, wh;

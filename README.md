@@ -22,7 +22,7 @@ cmake --build build -j
 
 Controls: WASD, mouse look, Space to jump, LMB primary ability, RMB secondary ability,
 Esc to release the mouse (Esc again to quit), F12 for a screenshot.
-Kills and joins are printed in the client terminal; your K/D is in the window title.
+Hold Tab for the scoreboard (it also opens while you are dead). Kills show in the top-right kill feed.
 
 | Class   | HP  | LMB                                    | RMB                                  |
 |---------|-----|----------------------------------------|--------------------------------------|

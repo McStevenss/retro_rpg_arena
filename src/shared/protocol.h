@@ -9,7 +9,7 @@
 
 namespace game {
 
-constexpr uint32_t PROTOCOL_VERSION = 3;
+constexpr uint32_t PROTOCOL_VERSION = 4;
 constexpr int NUM_CHANNELS = 2;
 constexpr int CH_RELIABLE = 0;    // join info, gameplay events
 constexpr int CH_UNRELIABLE = 1;  // inputs and snapshots, newest wins
@@ -78,6 +78,7 @@ struct NetPlayer {
     int16_t hp;
     uint16_t kills;
     uint16_t deaths;
+    uint16_t ping;          // round-trip time to the server, ms
     uint32_t lastInputSeq;  // last input the server applied for this player
     PlayerState s;
 };

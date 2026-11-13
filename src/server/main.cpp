@@ -390,6 +390,7 @@ void broadcastSnapshot() {
         np.hp = static_cast<int16_t>(std::ceil(c.hp));
         np.kills = c.kills;
         np.deaths = c.deaths;
+        np.ping = static_cast<uint16_t>(std::min<enet_uint32>(c.peer->roundTripTime, 65535));
         np.lastInputSeq = c.lastSeq;
         np.s = c.st;
         append(&np, sizeof np);

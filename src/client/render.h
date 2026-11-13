@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <string>
 #include <vector>
 
 struct Camera {
@@ -29,6 +30,18 @@ constexpr int MAX_LIGHTS = 32;  // nearest ones to the camera are used each fram
 
 enum class WeaponTex { Sword, Staff };
 
+// HUD primitives in framebuffer pixels, origin top-left.
+struct HudRect {
+    int x, y, w, h;
+    glm::vec4 color;  // a < 1 = translucent
+};
+
+struct HudText {
+    int x, y;  // top-left of the first glyph
+    std::string text;
+    glm::vec3 color;
+};
+
 struct Hud {
     float hpFrac = 1;
     float ready[2] = {1, 1};      // per ability slot: 0 = just used, 1 = ready
@@ -41,6 +54,8 @@ struct Hud {
     glm::vec3 weaponLight{1};     // light falling on the weapon (from nearby spells)
     glm::vec4 flash{0};           // full-screen colour overlay, a = opacity
     bool hitMarker = false;
+    std::vector<HudRect> rects;   // drawn first (panels, highlights)
+    std::vector<HudText> texts;   // drawn on top, with a 1 px drop shadow
 };
 
 // Renders the world into a small offscreen framebuffer (the "retro" resolution)
@@ -59,6 +74,7 @@ private:
     void buildLevel();
     void drawQuad(glm::vec3 tl, glm::vec3 tr, glm::vec3 br, glm::vec3 bl, float shade);
     void setEmissive(bool on, glm::vec3 color = glm::vec3(1));
+    void drawText(const HudText& t, glm::vec3 color, int dx, int dy);
     void drawHud(const Hud& hud);
     void fillRect(int x, int y, int w, int h, float r, float g, float b);
 
@@ -72,5 +88,5 @@ private:
     int wallFirst_ = 0, wallCount_ = 0, floorFirst_ = 0, floorCount_ = 0, ceilFirst_ = 0, ceilCount_ = 0;
     unsigned spriteVao_ = 0, spriteVbo_ = 0;
     unsigned texWall_ = 0, texFloor_ = 0, texCeil_ = 0, texPlayer_ = 0;
-    unsigned texOrb_ = 0, texSword_ = 0, texStaff_ = 0, texWhite_ = 0, texTorch_ = 0;
+    unsigned texOrb_ = 0, texSword_ = 0, texStaff_ = 0, texWhite_ = 0, texTorch_ = 0, texFont_ = 0;
 };

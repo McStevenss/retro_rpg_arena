@@ -63,6 +63,7 @@ add_executable(boyz_client
   src/client/main.cpp
   src/client/gl.cpp
   src/client/render.cpp
-  src/client/textures.cpp)
+  src/client/textures.cpp
+  src/client/font.cpp)
 target_link_libraries(boyz_client PRIVATE boyz_shared enet SDL3::SDL3 glm::glm OpenGL::GL)
 target_compile_options(boyz_client PRIVATE ${WARN})

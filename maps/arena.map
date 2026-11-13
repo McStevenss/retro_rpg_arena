@@ -1,0 +1,54 @@
+// boyzpvp map format
+//
+// The world is a grid of 3x3 m tiles. Each character in [grid] is a column
+// type defined in [legend]. Heights are in metres; 0 is the main floor.
+//
+//   solid                 the whole column is wall
+//   floor H               solid from the bottom of the world up to H (default 0)
+//   ceil H                solid from H to the top of the world (default 3)
+//   slab A B              extra solid layer from A to B: balconies, bridges,
+//                         the floor between two storeys
+//   stairs DIR H0 H1      steps rising from H0 to H1 toward DIR (n/s/e/w);
+//                         n = up the screen, e = right
+//   spawn [H]             players can spawn here, at height H (default: floor)
+//
+// Lines starting with // are comments.
+
+[legend]
+#  solid
+.  floor 0 ceil 3
+S  floor 0 ceil 3 spawn
+,  floor 0 ceil 7.5
+p  floor 0.75 ceil 7.5
+P  floor 1.5 ceil 7.5
+=  floor 0 slab 3 3.5 ceil 7.5
+d  floor 0 slab 3 3.5 ceil 6.5
+U  floor 0 slab 3 3.5 ceil 6.5 spawn 3.5
+1  stairs n 0 1.75 ceil 7.5
+2  stairs n 1.75 3.5 ceil 7.5
+3  stairs s 0 1.75 ceil 7.5
+4  stairs s 1.75 3.5 ceil 7.5
+
+// Great hall in the middle (7.5 m ceiling) with balconies along the north and
+// south walls joined by a bridge, stairs in every corner, and stepped
+// platforms. North and south of the hall are two-storey rooms: ground floor
+// reached from the side corridors, upper floor through the balcony doors.
+[grid]
+############################
+#S....####dddddddd####....S#
+#.........dUdddddd.........#
+#.....####dddddddd####.....#
+#..#..#######dd#######..#..#
+#.....#==============#.....#
+#.....#2,,,,,==,,,,,2#.....#
+#.....#1,,,,,==,,,,,1#.....#
+#..S...,,pP,,==,,Pp,,...S..#
+#......,,pP,,==,,Pp,,......#
+#.....#3,,,,,==,,,,,3#.....#
+#.....#4,,,,,==,,,,,4#.....#
+#.....#==============#.....#
+#..#..#######dd#######..#..#
+#.....####dddddddd####.....#
+#.........ddddddUd.........#
+#S....####dddddddd####....S#
+############################

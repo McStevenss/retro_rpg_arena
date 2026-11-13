@@ -8,9 +8,39 @@ struct Camera {
     float pitch;
 };
 
-struct SpriteDraw {
-    glm::vec3 feet;
+enum class SpriteTex { Player, Orb };
+
+// Camera-facing sprite in the world. `base` is the bottom centre.
+struct Billboard {
+    glm::vec3 base;
+    float width, height;
     glm::vec3 tint;
+    SpriteTex tex;
+    float brightness = 1.0f;
+};
+
+// Dynamic point light (spells, impacts, ...). Colour may exceed 1 for bright lights.
+struct PointLight {
+    glm::vec3 pos;
+    glm::vec3 color;
+    float radius;
+};
+constexpr int MAX_LIGHTS = 16;  // nearest ones to the camera are used each frame
+
+enum class WeaponTex { Sword, Staff };
+
+struct Hud {
+    float hpFrac = 1;
+    float ready[2] = {1, 1};      // per ability slot: 0 = just used, 1 = ready
+    glm::vec3 classColor{1};
+    bool showWeapon = true;
+    WeaponTex weapon = WeaponTex::Sword;
+    glm::vec2 weaponOffset{0};    // pixels, relative to resting position
+    float weaponAngle = 0;        // radians, + = top tilts left
+    float weaponGlow = 1;         // multiplies the tint (staff orb)
+    glm::vec3 weaponLight{1};     // light falling on the weapon (from nearby spells)
+    glm::vec4 flash{0};           // full-screen colour overlay, a = opacity
+    bool hitMarker = false;
 };
 
 // Renders the world into a small offscreen framebuffer (the "retro" resolution)
@@ -19,21 +49,28 @@ class Renderer {
 public:
     bool init(int internalW, int internalH);
     void shutdown();
-    void renderFrame(const Camera& cam, const std::vector<SpriteDraw>& sprites, float hpFrac);
+    void renderFrame(const Camera& cam, const std::vector<Billboard>& billboards,
+                     const std::vector<PointLight>& lights, const Hud& hud);
     void present(int windowW, int windowH);
     // Writes the low-res frame to a binary PPM file.
     bool saveScreenshot(const char* path);
 
 private:
     void buildLevel();
+    void drawQuad(glm::vec3 tl, glm::vec3 tr, glm::vec3 br, glm::vec3 bl, float shade);
+    void setEmissive(bool on, glm::vec3 color = glm::vec3(1));
+    void drawHud(const Hud& hud);
     void fillRect(int x, int y, int w, int h, float r, float g, float b);
 
     int w_ = 0, h_ = 0;
     unsigned fbo_ = 0, fboColor_ = 0, fboDepth_ = 0;
     unsigned prog_ = 0;
     int uViewProj_ = -1, uCamPos_ = -1, uTint_ = -1, uFogColor_ = -1, uFogStart_ = -1, uFogEnd_ = -1;
+    int uFogScale_ = -1, uAlpha_ = -1;
+    int uLightCount_ = -1, uLightPos_ = -1, uLightColor_ = -1, uAmbient_ = -1, uEmissive_ = -1, uEmissiveColor_ = -1;
     unsigned levelVao_ = 0, levelVbo_ = 0;
     int wallFirst_ = 0, wallCount_ = 0, floorFirst_ = 0, floorCount_ = 0, ceilFirst_ = 0, ceilCount_ = 0;
     unsigned spriteVao_ = 0, spriteVbo_ = 0;
     unsigned texWall_ = 0, texFloor_ = 0, texCeil_ = 0, texPlayer_ = 0;
+    unsigned texOrb_ = 0, texSword_ = 0, texStaff_ = 0, texWhite_ = 0;
 };

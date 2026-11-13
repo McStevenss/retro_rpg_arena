@@ -50,6 +50,7 @@ add_library(boyz_shared STATIC
   src/shared/game.cpp
   src/shared/map.cpp)
 target_include_directories(boyz_shared PUBLIC src/shared)
+target_compile_definitions(boyz_shared PRIVATE BOYZ_SOURCE_MAPS_DIR="${CMAKE_SOURCE_DIR}/maps")
 target_compile_options(boyz_shared PRIVATE ${WARN})
 
 # --- Dedicated server (headless, no SDL) ------------------------------------

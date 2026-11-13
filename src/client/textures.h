@@ -12,6 +12,10 @@ struct Image {
 Image makeStoneWall();
 Image makeFlagstoneFloor();
 Image makeWoodCeiling();
-// White-ish humanoid. Alpha 255 = draw as-is, alpha ~191 = tint with class
-// color, alpha 0 = transparent.
-Image makePlayerSprite();
+// Sprites use the alpha channel as a mask: 255 = draw as-is, ~191 = multiply
+// by the tint colour, 0 = transparent.
+Image makePlayerSprite();       // white-ish humanoid, robe tinted by class
+Image makeOrbSprite();          // glowing ball for projectiles / impacts
+Image makeSwordSprite();        // first-person weapon (warrior)
+Image makeStaffSprite();        // first-person weapon (casters), orb tinted
+Image makeWhite();              // 1x1 white (tintable), for flat-colour overlays

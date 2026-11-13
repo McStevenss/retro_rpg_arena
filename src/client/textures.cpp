@@ -40,6 +40,17 @@ uint8_t alphaAt(const Image& img, int x, int y) {
     return img.rgba[(static_cast<size_t>(y) * img.w + x) * 4 + 3];
 }
 
+// 1px dark outline so sprites read against dark walls.
+Image outlined(const Image& img) {
+    Image out = img;
+    for (int y = 0; y < img.h; ++y)
+        for (int x = 0; x < img.w; ++x)
+            if (alphaAt(img, x, y) == 0 && (alphaAt(img, x - 1, y) || alphaAt(img, x + 1, y) ||
+                                            alphaAt(img, x, y - 1) || alphaAt(img, x, y + 1)))
+                put(out, x, y, 15, 12, 10);
+    return out;
+}
+
 }  // namespace
 
 Image makeStoneWall() {
@@ -151,12 +162,91 @@ Image makePlayerSprite() {
     put(img, 14, 9, 20, 20, 20);
     put(img, 18, 9, 20, 20, 20);
 
-    // 1px dark outline so sprites read against dark walls.
-    Image out = img;
-    for (int y = 0; y < img.h; ++y)
-        for (int x = 0; x < img.w; ++x)
-            if (alphaAt(img, x, y) == 0 && (alphaAt(img, x - 1, y) || alphaAt(img, x + 1, y) ||
-                                            alphaAt(img, x, y - 1) || alphaAt(img, x, y + 1)))
-                put(out, x, y, 15, 12, 10);
-    return out;
+    return outlined(img);
+}
+
+Image makeOrbSprite() {
+    const uint8_t TINT = 191;
+    Image img = blank(16, 16);
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            float dx = x + 0.5f - 8.0f, dy = y + 0.5f - 8.0f;
+            float d = std::sqrt(dx * dx + dy * dy);
+            if (d < 2.6f) put(img, x, y, 255, 255, 240);  // hot white core
+            else if (d < 7.5f) {
+                float k = 1.0f - (d - 2.6f) / 4.9f * 0.55f;
+                k *= 0.9f + 0.1f * rnd(x, y, 10);
+                put(img, x, y, 255 * k, 255 * k, 255 * k, TINT);
+            }
+        }
+    }
+    return img;
+}
+
+Image makeSwordSprite() {
+    Image img = blank(32, 64);
+    // Blade with a tapered tip.
+    for (int y = 0; y < 45; ++y) {
+        int x0 = 14, x1 = 17;
+        if (y < 2) { x0 = 15; x1 = 16; }
+        for (int x = x0; x <= x1; ++x) {
+            float n = 0.93f + 0.07f * rnd(x, y, 11);
+            if (x == 14) put(img, x, y, 225 * n, 230 * n, 235 * n);
+            else if (x == 17) put(img, x, y, 105 * n, 110 * n, 120 * n);
+            else put(img, x, y, 170 * n, 176 * n, 186 * n);
+        }
+    }
+    // Crossguard.
+    for (int y = 45; y < 49; ++y)
+        for (int x = 5; x < 27; ++x) {
+            float k = (y == 45) ? 1.2f : (y == 48 ? 0.7f : 1.0f);
+            put(img, x, y, 170 * k, 125 * k, 45 * k);
+        }
+    // Leather grip.
+    for (int y = 49; y < 59; ++y)
+        for (int x = 14; x < 18; ++x) {
+            float k = ((y + x) % 3 == 0) ? 0.7f : 1.0f;
+            put(img, x, y, 85 * k, 52 * k, 30 * k);
+        }
+    // Pommel.
+    for (int y = 59; y < 63; ++y)
+        for (int x = 13; x < 19; ++x) put(img, x, y, 175, 130, 50);
+    return outlined(img);
+}
+
+Image makeStaffSprite() {
+    const uint8_t TINT = 191;
+    Image img = blank(32, 64);
+    // Shaft.
+    for (int y = 14; y < 64; ++y)
+        for (int x = 14; x < 18; ++x) {
+            float k = (x == 14 ? 1.15f : x == 17 ? 0.7f : 1.0f) * (0.88f + 0.12f * rnd(x, y / 3, 12));
+            if (y % 11 == 0) k *= 0.75f;  // knots
+            put(img, x, y, 112 * k, 74 * k, 40 * k);
+        }
+    // Claws holding the orb.
+    for (int y = 7; y < 16; ++y) {
+        put(img, 9, y, 100, 66, 36);
+        put(img, 10, y, 120, 80, 44);
+        put(img, 21, y, 90, 60, 32);
+        put(img, 22, y, 80, 54, 30);
+    }
+    // Orb (tinted by class colour, brightened by the renderer when casting).
+    for (int y = 1; y < 17; ++y)
+        for (int x = 9; x < 23; ++x) {
+            float dx = x + 0.5f - 16.0f, dy = y + 0.5f - 9.0f;
+            float d = std::sqrt(dx * dx + dy * dy);
+            if (d > 6.2f) continue;
+            float k = 1.0f - d / 6.2f * 0.45f;
+            put(img, x, y, 245 * k, 245 * k, 245 * k, TINT);
+        }
+    put(img, 14, 6, 255, 255, 255);
+    put(img, 13, 7, 255, 255, 255);
+    return outlined(img);
+}
+
+Image makeWhite() {
+    Image img = blank(1, 1);
+    put(img, 0, 0, 255, 255, 255, 191);  // marked tintable, so overlays take the tint colour
+    return img;
 }

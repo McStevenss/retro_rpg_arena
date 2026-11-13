@@ -2,6 +2,7 @@
 // Anything that affects gameplay outcome must live here so both sides agree.
 #pragma once
 #include <cstdint>
+#include <string>
 
 namespace game {
 
@@ -11,30 +12,64 @@ constexpr float TICK_DT = 1.0f / TICK_RATE;
 constexpr int SNAPSHOT_EVERY = 3;              // server sends state at 60/3 = 20 Hz
 constexpr uint16_t DEFAULT_PORT = 27960;
 constexpr int MAX_PLAYERS = 16;
+constexpr int RESPAWN_TICKS = 3 * TICK_RATE;
 
 // --- World scale (1 unit = 1 meter) -----------------------------------------
 constexpr float TILE = 3.0f;
-constexpr float WALL_H = 3.0f;
+constexpr float STEP_HEIGHT = 0.55f;      // walk up ledges/stairs this high
+constexpr float AIR_STEP_HEIGHT = 0.3f;   // forgiving ledge-climb while airborne
 constexpr float PLAYER_RADIUS = 0.35f;
 constexpr float PLAYER_HEIGHT = 1.8f;
 constexpr float EYE_HEIGHT = 1.6f;
 constexpr float GRAVITY = 20.0f;
 constexpr float JUMP_VEL = 6.5f;
 constexpr float AIR_CONTROL = 2.0f;
+constexpr float DASH_SPEED_MULT = 3.2f;
+constexpr float SLOW_MULT = 0.5f;
+
+// --- Abilities --------------------------------------------------------------
+enum class AbilityId : uint8_t {
+    SwordSwing, Charge,       // warrior
+    Fireball, FrostBolt,      // mage
+    Thorns, Regrowth,         // druid
+    HolyBolt, Heal,           // healer
+    Count
+};
+
+enum class AbilityKind : uint8_t { Melee, Projectile, Dash, SelfHeal, HealOverTime };
+
+struct AbilityInfo {
+    const char* name;
+    AbilityKind kind;
+    uint16_t cooldownTicks;
+    float amount;            // damage (melee/projectile) or total heal
+    float range;             // melee reach, m
+    float arcCos;            // melee cone, cos(half angle); -1 = all around
+    float projSpeed;         // m/s
+    float projRadius;        // m
+    float splashRadius;      // m, 0 = no splash
+    float splashDamage;      // at the centre, falls off to half at the edge
+    uint16_t slowTicks;      // slow applied to whoever is hit
+    uint16_t durationTicks;  // dash length / heal-over-time length
+};
+const AbilityInfo& abilityInfo(AbilityId id);
 
 // --- Classes ----------------------------------------------------------------
 enum class PlayerClass : uint8_t { Warrior, Mage, Druid, Healer, Count };
+
+constexpr int NUM_ABILITY_SLOTS = 2;  // slot 0 = primary (LMB), 1 = secondary (RMB)
 
 struct ClassInfo {
     const char* name;
     float maxHp;
     float moveSpeed;  // m/s
+    AbilityId abilities[NUM_ABILITY_SLOTS];
 };
 const ClassInfo& classInfo(PlayerClass c);
 bool parseClass(const char* s, PlayerClass& out);
 
 // --- Input / state ----------------------------------------------------------
-enum Buttons : uint8_t { BTN_JUMP = 1, BTN_ATTACK = 2, BTN_ABILITY = 4 };
+enum Buttons : uint8_t { BTN_JUMP = 1, BTN_PRIMARY = 2, BTN_SECONDARY = 4 };
 
 // One simulation tick of player intent. Sent client -> server.
 struct InputCmd {
@@ -47,21 +82,66 @@ struct InputCmd {
     float pitch;       // radians, + = up
 };
 
+// Everything here is predicted by the client, so it must only be changed by
+// simulate() -- or by the server, which then sends it back in snapshots.
 struct PlayerState {
     float x, y, z;     // feet position
     float vx, vy, vz;
     float yaw, pitch;
+    uint16_t cooldown[NUM_ABILITY_SLOTS];  // ticks until ability can be used
+    uint16_t slowTicks;
+    uint16_t dashTicks;
     uint8_t onGround;
+    uint8_t alive;
 };
 
 // Advance one player by one tick. Deterministic: same input -> same output.
-void simulate(PlayerState& s, const InputCmd& in, PlayerClass cls, float dt);
+// Returns a bitmask of ability slots that were triggered this tick.
+uint8_t simulate(PlayerState& s, const InputCmd& in, PlayerClass cls, float dt);
+
+void viewDir(float yaw, float pitch, float& dx, float& dy, float& dz);
 
 // --- Map --------------------------------------------------------------------
+// The world is a grid of TILE x TILE columns. Each column is a stack of solid
+// vertical spans (floor, slabs, ceiling) plus optionally a staircase, which
+// physics treats as a smooth ramp.
+constexpr float WORLD_BOTTOM = -100.0f;
+constexpr float WORLD_TOP = 100.0f;
+constexpr int MAX_SPANS = 6;
+
+struct Span {
+    float y0, y1;
+};
+
+struct Ramp {
+    int8_t dx, dz;  // direction the stairs rise toward
+    float h0, h1;   // height at the low and high edge of the tile
+};
+
+struct Column {
+    Span spans[MAX_SPANS];  // sorted bottom to top, non-overlapping
+    uint8_t numSpans;
+    uint8_t hasRamp;
+    Ramp ramp;
+};
+
+bool loadMap(const std::string& path, std::string& err);
+// Resolves a map name ("arena") or path to a file, searching ./maps, the
+// executable's directory and the source tree. Returns "" if not found.
+std::string findMapFile(const std::string& nameOrPath, const char* argv0);
+const std::string& mapName();
+uint32_t mapHash();  // so clients can verify they have the same map as the server
+
 int mapWidth();
 int mapHeight();
-bool isSolid(int tx, int tz);  // out of bounds counts as solid
+const Column& column(int tx, int tz);  // out of bounds = solid
+// Solid intervals of a tile as seen by a box covering [x0,x1]x[z0,z1]
+// (stairs count up to their highest point under the box). `out` needs
+// room for MAX_SPANS + 1 entries. Returns the count.
+int solidIntervals(int tx, int tz, float x0, float x1, float z0, float z1, Span* out);
+bool pointInWall(float x, float y, float z);
+bool lineOfSight(float x0, float y0, float z0, float x1, float y1, float z1);
 int spawnCount();
-void spawnPoint(int index, float& x, float& z);
+void spawnPoint(int index, float& x, float& y, float& z);
 
 }  // namespace game

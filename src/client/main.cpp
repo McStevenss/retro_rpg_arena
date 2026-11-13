@@ -148,12 +148,12 @@ glm::vec3 sampleRemote(const Remote& r, double t) {
 // Visual-only data per ability.
 glm::vec3 abilityColor(AbilityId id) {
     switch (id) {
-        case AbilityId::Fireball: return {1.0f, 0.5f, 0.12f};
-        case AbilityId::FrostBolt: return {0.5f, 0.8f, 1.0f};
-        case AbilityId::Thorns: return {0.55f, 0.9f, 0.3f};
-        case AbilityId::Regrowth: return {0.4f, 1.0f, 0.4f};
-        case AbilityId::HolyBolt: return {1.0f, 0.95f, 0.55f};
-        case AbilityId::Heal: return {1.0f, 0.95f, 0.6f};
+        case AbilityId::Fireball: return {1.0f, 0.38f, 0.04f};
+        case AbilityId::FrostBolt: return {0.25f, 0.7f, 1.0f};
+        case AbilityId::Thorns: return {0.45f, 1.0f, 0.12f};
+        case AbilityId::Regrowth: return {0.2f, 1.0f, 0.3f};
+        case AbilityId::HolyBolt: return {1.0f, 0.85f, 0.25f};
+        case AbilityId::Heal: return {1.0f, 0.9f, 0.35f};
         default: return {1, 1, 1};
     }
 }
@@ -165,12 +165,12 @@ struct LightStyle {
 
 LightStyle abilityLight(AbilityId id) {
     switch (id) {
-        case AbilityId::Fireball: return {7.0f, 1.6f};
-        case AbilityId::FrostBolt: return {5.0f, 1.2f};
-        case AbilityId::Thorns: return {3.0f, 0.8f};
-        case AbilityId::HolyBolt: return {5.5f, 1.4f};
-        case AbilityId::Regrowth: return {5.0f, 1.2f};
-        case AbilityId::Heal: return {6.0f, 1.5f};
+        case AbilityId::Fireball: return {8.5f, 2.2f};
+        case AbilityId::FrostBolt: return {6.5f, 1.7f};
+        case AbilityId::Thorns: return {4.0f, 1.1f};
+        case AbilityId::HolyBolt: return {7.0f, 1.9f};
+        case AbilityId::Regrowth: return {6.0f, 1.6f};
+        case AbilityId::Heal: return {7.0f, 2.0f};
         default: return {4.0f, 1.0f};
     }
 }
@@ -610,10 +610,17 @@ int main(int argc, char** argv) {
             // Extrapolate along the (straight) flight path since the snapshot.
             float dt = static_cast<float>(std::min(t - recvT, 0.2));
             AbilityId ab = static_cast<AbilityId>(p.ability);
-            float size = std::max(0.25f, abilityInfo(ab).projRadius * 2.6f);
-            glm::vec3 pos(p.x + p.vx * dt, p.y + p.vy * dt - size * 0.5f, p.z + p.vz * dt);
-            if (glm::distance(pos + glm::vec3(0, size * 0.5f, 0), cam.eye) > size * 0.5f + 0.6f)
-                billboards.push_back({pos, size, size, abilityColor(ab), SpriteTex::Orb, 1.4f});
+            float size = std::max(0.3f, abilityInfo(ab).projRadius * 3.2f);
+            glm::vec3 center(p.x + p.vx * dt, p.y + p.vy * dt, p.z + p.vz * dt);
+            if (glm::distance(center, cam.eye) <= size * 0.5f + 0.6f) continue;
+            billboards.push_back({center - glm::vec3(0, size * 0.5f, 0), size, size, abilityColor(ab), SpriteTex::Orb, 1.8f});
+            // Short fading trail behind it.
+            glm::vec3 back = -glm::normalize(glm::vec3(p.vx, p.vy, p.vz) + glm::vec3(1e-4f));
+            for (int k = 1; k <= 3; ++k) {
+                float ts = size * (1.0f - 0.22f * k);
+                glm::vec3 c = center + back * (size * 0.55f * k);
+                billboards.push_back({c - glm::vec3(0, ts * 0.5f, 0), ts, ts, abilityColor(ab), SpriteTex::Orb, 1.6f - 0.3f * k});
+            }
         }
         bursts.erase(std::remove_if(bursts.begin(), bursts.end(), [&](const Burst& b) { return t - b.t0 > b.duration; }),
                      bursts.end());
@@ -622,7 +629,7 @@ int main(int argc, char** argv) {
             float size = std::max(0.05f, b.size * k);
             // Glows right on top of the camera would just fill the screen; their light still shows.
             if (glm::distance(b.pos, cam.eye) > b.size * 0.5f + 0.6f)
-                billboards.push_back({b.pos - glm::vec3(0, size * 0.5f, 0), size, size, b.color, SpriteTex::Orb, 1.4f});
+                billboards.push_back({b.pos - glm::vec3(0, size * 0.5f, 0), size, size, b.color, SpriteTex::Orb, 1.8f});
         }
 
         // --- Dynamic lights ---
@@ -646,6 +653,20 @@ int main(int argc, char** argv) {
             float k = static_cast<float>(1.0 - (t - f.t0) / f.duration);
             lights.push_back({f.pos, f.color * k, f.radius});
         }
+        // Torches: flickering warm light plus the torch sprite.
+        for (int i = 0; i < torchCount(); ++i) {
+            const Torch& tc = torchAt(i);
+            float ft = static_cast<float>(t);
+            float flicker = 0.85f + 0.09f * std::sin(ft * 13.0f + i * 2.1f) + 0.06f * std::sin(ft * 31.0f + i * 0.7f);
+            glm::vec3 flame(tc.x, tc.y, tc.z);
+            // Light sits a little out from the wall so the wall itself catches it.
+            glm::vec3 lightPos = flame - glm::vec3(tc.dx, 0, tc.dz) * 0.6f;
+            lights.push_back({lightPos, glm::vec3(1.0f, 0.55f, 0.2f) * 1.9f * flicker, 9.0f});
+            float h = 1.0f * (0.96f + 0.04f * flicker);
+            billboards.push_back({flame - glm::vec3(0, h * 0.62f, 0), h * 0.5f, h, glm::vec3(1.0f, 0.55f, 0.15f),
+                                  SpriteTex::Torch, 1.1f * flicker});
+        }
+
         // Light reaching the first-person weapon (no normals: it's a flat sprite).
         glm::vec3 weaponLight(0.85f);
         for (const PointLight& l : lights) {
@@ -669,7 +690,7 @@ int main(int argc, char** argv) {
         hud.weaponGlow = pose.glow;
         hud.hitMarker = hitMarkerT >= 0 && t - hitMarkerT < 0.15;
         if (!alive) hud.flash = {0.35f, 0.0f, 0.0f, 0.55f};
-        else if (hurtT >= 0 && t - hurtT < 0.3) hud.flash = {0.8f, 0.05f, 0.0f, 0.35f * static_cast<float>(1.0 - (t - hurtT) / 0.3)};
+        else if (hurtT >= 0 && t - hurtT < 0.3) hud.flash = {0.8f, 0.05f, 0.0f, 0.25f * static_cast<float>(1.0 - (t - hurtT) / 0.3)};
         else if (healT >= 0 && t - healT < 0.4) hud.flash = {0.3f, 1.0f, 0.4f, 0.2f * static_cast<float>(1.0 - (t - healT) / 0.4)};
 
         renderer.renderFrame(cam, billboards, lights, hud);

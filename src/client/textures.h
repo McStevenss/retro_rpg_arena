@@ -18,4 +18,5 @@ Image makePlayerSprite();       // white-ish humanoid, robe tinted by class
 Image makeOrbSprite();          // glowing ball for projectiles / impacts
 Image makeSwordSprite();        // first-person weapon (warrior)
 Image makeStaffSprite();        // first-person weapon (casters), orb tinted
+Image makeTorchSprite();        // wall torch: flame (tinted) on a wooden handle
 Image makeWhite();              // 1x1 white (tintable), for flat-colour overlays

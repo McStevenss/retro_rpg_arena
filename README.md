@@ -41,7 +41,8 @@ To play over the internet, forward UDP 27960 to the machine running the server.
 
 Maps are text files in `maps/` (see `maps/arena.map`, which documents the format at the top).
 Each grid character is a column type from the legend: a floor height, a ceiling height, optional
-`slab`s (balconies, bridges, the floor between storeys), `stairs`, and `spawn` points. That's
+`slab`s (balconies, bridges, the floor between storeys), `stairs`, `spawn` points and wall
+`torch`es. That's
 enough for tall halls, balconies you can walk under, stacked rooms, platforms and staircases.
 Edit a map and restart the server; no recompile needed. Clients load the map the server names
 and refuse to join if their copy differs.
@@ -77,7 +78,7 @@ The world renders into a 400x225 framebuffer that's upscaled with nearest filter
 The shader adds flat per-face shading, dark distance fog and ordered-dither colour quantisation.
 Players are camera-facing billboard sprites, tinted by class.
 
-Dynamic lighting: projectiles, impacts, heals and spell casts are point lights (the 16 nearest the
-camera each frame), lit per pixel with surface normals so light doesn't bleed through walls.
+Dynamic lighting: flickering wall torches, projectiles (with glowing trails), impacts, heals and
+spell casts are point lights (the 32 nearest the camera each frame), lit per pixel with surface normals so light doesn't bleed through walls.
 Ambient is kept dim so spells light up the dungeon. No shadows: light still reaches floors on the
 other side of a thin wall if they're within its radius.

@@ -245,6 +245,34 @@ Image makeStaffSprite() {
     return outlined(img);
 }
 
+Image makeTorchSprite() {
+    const uint8_t TINT = 191;
+    Image img = blank(16, 32);
+    // Handle, narrowing toward the bottom.
+    for (int y = 15; y < 32; ++y) {
+        int half = y < 24 ? 2 : 1;
+        for (int x = 8 - half; x < 8 + half; ++x) {
+            float k = (x < 8 ? 1.0f : 0.7f) * (0.85f + 0.15f * rnd(x, y, 13));
+            put(img, x, y, 95 * k, 60 * k, 32 * k);
+        }
+    }
+    // Metal cup holding the flame.
+    for (int y = 12; y < 16; ++y)
+        for (int x = 4; x < 12; ++x) put(img, x, y, 70, 64, 60);
+    // Flame: teardrop with a hot core (untinted) and an outer tongue (tinted).
+    for (int y = 0; y < 13; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            float fy = (13 - y) / 13.0f;                 // 0 at cup, 1 at tip
+            float half = 4.5f * std::sin(3.14159f * std::sqrt(fy) * 0.95f) + 0.3f;
+            float dx = std::fabs(x + 0.5f - 8.0f);
+            if (dx > half) continue;
+            if (dx < half * 0.45f && fy < 0.6f) put(img, x, y, 255, 245, 200);
+            else put(img, x, y, 255, 255 - 40 * fy, 230, TINT);
+        }
+    }
+    return img;
+}
+
 Image makeWhite() {
     Image img = blank(1, 1);
     put(img, 0, 0, 255, 255, 255, 191);  // marked tintable, so overlays take the tint colour

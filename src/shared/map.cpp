@@ -17,12 +17,18 @@ struct SpawnPos {
     float x, y, z;
 };
 
+struct TorchDef {
+    int8_t dx, dz;
+    float y;
+};
+
 struct MapData {
     std::string name;
     uint32_t hash = 0;
     int w = 0, h = 0;
     std::vector<Column> cols;
     std::vector<SpawnPos> spawns;
+    std::vector<Torch> torches;
 };
 
 MapData g_map;
@@ -55,7 +61,27 @@ struct ColumnDef {
     Column col{};
     bool spawn = false;
     float spawnY = 0;
+    std::vector<TorchDef> torches;
 };
+
+bool parseDir(const std::string& dir, int8_t& dx, int8_t& dz) {
+    dx = dz = 0;
+    if (dir == "n") dz = -1;
+    else if (dir == "s") dz = 1;
+    else if (dir == "e") dx = 1;
+    else if (dir == "w") dx = -1;
+    else return false;
+    return true;
+}
+
+// Reads an optional number; leaves the stream untouched if the next token isn't one.
+bool optionalNumber(std::istringstream& in, float& out) {
+    auto pos = in.tellg();
+    if (in >> out) return true;
+    in.clear();
+    in.seekg(pos);
+    return false;
+}
 
 bool parseColumn(const std::string& spec, ColumnDef& out, std::string& err) {
     std::istringstream in(spec);
@@ -80,25 +106,19 @@ bool parseColumn(const std::string& spec, ColumnDef& out, std::string& err) {
             float h0, h1;
             if (!(in >> dir >> h0 >> h1)) { err = "'stairs' needs a direction and two heights"; return false; }
             Ramp r{0, 0, h0, h1};
-            if (dir == "n") r.dz = -1;
-            else if (dir == "s") r.dz = 1;
-            else if (dir == "e") r.dx = 1;
-            else if (dir == "w") r.dx = -1;
-            else { err = "stairs direction must be n, s, e or w"; return false; }
+            if (!parseDir(dir, r.dx, r.dz)) { err = "stairs direction must be n, s, e or w"; return false; }
             c.hasRamp = 1;
             c.ramp = r;
             floorH = h0;
         } else if (tok == "spawn") {
             out.spawn = true;
-            auto pos = in.tellg();
-            float y;
-            if (in >> y) {
-                out.spawnY = y;
-                spawnHasY = true;
-            } else {
-                in.clear();
-                in.seekg(pos);
-            }
+            spawnHasY = optionalNumber(in, out.spawnY);
+        } else if (tok == "torch") {
+            std::string dir;
+            TorchDef t{0, 0, 2.0f};
+            if (!(in >> dir) || !parseDir(dir, t.dx, t.dz)) { err = "'torch' needs a wall direction (n, s, e or w)"; return false; }
+            optionalNumber(in, t.y);
+            out.torches.push_back(t);
         } else {
             err = "unknown keyword '" + tok + "'";
             return false;
@@ -194,6 +214,10 @@ bool loadMap(const std::string& path, std::string& err) {
             }
             m.cols[static_cast<size_t>(z) * m.w + x] = it->second.col;
             if (it->second.spawn) m.spawns.push_back({(x + 0.5f) * TILE, it->second.spawnY, (z + 0.5f) * TILE});
+            for (const TorchDef& t : it->second.torches) {
+                const float off = TILE * 0.5f - 0.2f;  // just off the wall surface
+                m.torches.push_back({(x + 0.5f) * TILE + t.dx * off, t.y, (z + 0.5f) * TILE + t.dz * off, t.dx, t.dz});
+            }
         }
     }
     if (m.spawns.empty()) { err = path + ": map has no spawn points"; return false; }
@@ -270,5 +294,8 @@ void spawnPoint(int index, float& x, float& y, float& z) {
     y = s.y;
     z = s.z;
 }
+
+int torchCount() { return static_cast<int>(g_map.torches.size()); }
+const Torch& torchAt(int index) { return g_map.torches[static_cast<size_t>(index)]; }
 
 }  // namespace game

@@ -144,4 +144,12 @@ bool lineOfSight(float x0, float y0, float z0, float x1, float y1, float z1);
 int spawnCount();
 void spawnPoint(int index, float& x, float& y, float& z);
 
+// Wall-mounted torches (visual only: the client draws them and their light).
+struct Torch {
+    float x, y, z;   // flame position, just off the wall
+    int8_t dx, dz;   // direction of the wall it hangs on
+};
+int torchCount();
+const Torch& torchAt(int index);
+
 }  // namespace game

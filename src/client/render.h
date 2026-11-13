@@ -8,7 +8,7 @@ struct Camera {
     float pitch;
 };
 
-enum class SpriteTex { Player, Orb };
+enum class SpriteTex { Player, Orb, Torch };
 
 // Camera-facing sprite in the world. `base` is the bottom centre.
 struct Billboard {
@@ -25,7 +25,7 @@ struct PointLight {
     glm::vec3 color;
     float radius;
 };
-constexpr int MAX_LIGHTS = 16;  // nearest ones to the camera are used each frame
+constexpr int MAX_LIGHTS = 32;  // nearest ones to the camera are used each frame
 
 enum class WeaponTex { Sword, Staff };
 
@@ -72,5 +72,5 @@ private:
     int wallFirst_ = 0, wallCount_ = 0, floorFirst_ = 0, floorCount_ = 0, ceilFirst_ = 0, ceilCount_ = 0;
     unsigned spriteVao_ = 0, spriteVbo_ = 0;
     unsigned texWall_ = 0, texFloor_ = 0, texCeil_ = 0, texPlayer_ = 0;
-    unsigned texOrb_ = 0, texSword_ = 0, texStaff_ = 0, texWhite_ = 0;
+    unsigned texOrb_ = 0, texSword_ = 0, texStaff_ = 0, texWhite_ = 0, texTorch_ = 0;
 };

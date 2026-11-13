@@ -11,6 +11,8 @@
 //   stairs DIR H0 H1      steps rising from H0 to H1 toward DIR (n/s/e/w);
 //                         n = up the screen, e = right
 //   spawn [H]             players can spawn here, at height H (default: floor)
+//   torch DIR [H]         torch on the wall toward DIR at height H (default 2);
+//                         can be repeated (e.g. one per storey)
 //
 // Lines starting with // are comments.
 
@@ -28,6 +30,13 @@ U  floor 0 slab 3 3.5 ceil 6.5 spawn 3.5
 2  stairs n 1.75 3.5 ceil 7.5
 3  stairs s 0 1.75 ceil 7.5
 4  stairs s 1.75 3.5 ceil 7.5
+// Same as above, with torches
+W  floor 0 ceil 3 torch w
+E  floor 0 ceil 3 torch e
+N  floor 0 slab 3 3.5 ceil 7.5 torch n 5.2
+Z  floor 0 slab 3 3.5 ceil 7.5 torch s 5.2
+D  floor 0 slab 3 3.5 ceil 6.5 torch n 2 torch n 5.5
+Q  floor 0 slab 3 3.5 ceil 6.5 torch s 2 torch s 5.5
 
 // Great hall in the middle (7.5 m ceiling) with balconies along the north and
 // south walls joined by a bridge, stairs in every corner, and stepped
@@ -35,20 +44,20 @@ U  floor 0 slab 3 3.5 ceil 6.5 spawn 3.5
 // reached from the side corridors, upper floor through the balcony doors.
 [grid]
 ############################
-#S....####dddddddd####....S#
+#S....####ddDddDdd####....S#
 #.........dUdddddd.........#
 #.....####dddddddd####.....#
-#..#..#######dd#######..#..#
-#.....#==============#.....#
+#W.#..#######dd#######..#.E#
+#.....#==N========N==#.....#
 #.....#2,,,,,==,,,,,2#.....#
 #.....#1,,,,,==,,,,,1#.....#
 #..S...,,pP,,==,,Pp,,...S..#
 #......,,pP,,==,,Pp,,......#
 #.....#3,,,,,==,,,,,3#.....#
 #.....#4,,,,,==,,,,,4#.....#
-#.....#==============#.....#
-#..#..#######dd#######..#..#
+#.....#==Z========Z==#.....#
+#W.#..#######dd#######..#.E#
 #.....####dddddddd####.....#
 #.........ddddddUd.........#
-#S....####dddddddd####....S#
+#S....####ddQddQdd####....S#
 ############################

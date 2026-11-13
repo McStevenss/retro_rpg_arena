@@ -53,7 +53,7 @@ uniform float uFogStart;
 uniform float uFogEnd;
 uniform float uFogScale;  // 0 = no fog (HUD overlays)
 uniform float uAlpha;     // < 1 only for blended overlays
-const int MAX_LIGHTS = 16;
+const int MAX_LIGHTS = 32;
 uniform int uLightCount;
 uniform vec4 uLightPos[MAX_LIGHTS];    // xyz = position, w = radius
 uniform vec3 uLightColor[MAX_LIGHTS];
@@ -226,6 +226,7 @@ bool Renderer::init(int internalW, int internalH) {
     texSword_ = makeTexture(makeSwordSprite(), false);
     texStaff_ = makeTexture(makeStaffSprite(), false);
     texWhite_ = makeTexture(makeWhite(), false);
+    texTorch_ = makeTexture(makeTorchSprite(), false);
 
     buildLevel();
 
@@ -421,7 +422,7 @@ void Renderer::renderFrame(const Camera& cam, const std::vector<Billboard>& bill
     glUniform1f(uFogEnd_, 42.0f);
     glUniform1f(uFogScale_, 1.0f);
     glUniform1f(uAlpha_, 1.0f);
-    glUniform1f(uAmbient_, 0.8f);
+    glUniform1f(uAmbient_, 0.72f);
     setEmissive(false);
 
     // Use the lights that matter most to this view: nearest to the camera,
@@ -462,8 +463,8 @@ void Renderer::renderFrame(const Camera& cam, const std::vector<Billboard>& bill
     glBindBuffer(GL_ARRAY_BUFFER, spriteVbo_);
     const glm::vec3 right(std::cos(cam.yaw), 0, std::sin(cam.yaw));
     for (const Billboard& b : billboards) {
-        glBindTexture(GL_TEXTURE_2D, b.tex == SpriteTex::Player ? texPlayer_ : texOrb_);
-        setEmissive(b.tex == SpriteTex::Orb);  // glows are light sources themselves
+        glBindTexture(GL_TEXTURE_2D, b.tex == SpriteTex::Player ? texPlayer_ : b.tex == SpriteTex::Orb ? texOrb_ : texTorch_);
+        setEmissive(b.tex != SpriteTex::Player);  // glows and torches are light sources themselves
         glUniform3f(uTint_, b.tint.r, b.tint.g, b.tint.b);
         glm::vec3 base = b.base;
         if (b.tex == SpriteTex::Orb) {
@@ -575,7 +576,7 @@ bool Renderer::saveScreenshot(const char* path) {
 }
 
 void Renderer::shutdown() {
-    GLuint texs[] = {texWall_, texFloor_, texCeil_, texPlayer_, texOrb_, texSword_, texStaff_, texWhite_, fboColor_};
+    GLuint texs[] = {texWall_, texFloor_, texCeil_, texPlayer_, texOrb_, texSword_, texStaff_, texWhite_, texTorch_, fboColor_};
     glDeleteTextures(sizeof(texs) / sizeof(texs[0]), texs);
     glDeleteRenderbuffers(1, &fboDepth_);
     glDeleteFramebuffers(1, &fbo_);

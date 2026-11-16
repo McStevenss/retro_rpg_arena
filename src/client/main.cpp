@@ -19,6 +19,7 @@
 #include "gl.h"
 #include "protocol.h"
 #include "render.h"
+#include "textures.h"
 
 using namespace game;
 
@@ -34,6 +35,7 @@ struct Options {
     uint16_t port = DEFAULT_PORT;
     std::string name = "player";
     PlayerClass cls = PlayerClass::Warrior;
+    bool clsGiven = false;  // no --class: pick one in game
 };
 
 glm::vec3 classColor(PlayerClass c) {
@@ -42,6 +44,8 @@ glm::vec3 classColor(PlayerClass c) {
         case PlayerClass::Mage: return {0.35f, 0.45f, 1.0f};
         case PlayerClass::Druid: return {0.4f, 0.8f, 0.3f};
         case PlayerClass::Healer: return {1.0f, 0.95f, 0.75f};
+        case PlayerClass::Rogue: return {0.95f, 0.8f, 0.2f};
+        case PlayerClass::Necromancer: return {0.65f, 0.3f, 0.9f};
         default: return {1, 1, 1};
     }
 }
@@ -54,14 +58,15 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--port" && hasVal) o.port = static_cast<uint16_t>(std::atoi(argv[++i]));
         else if (a == "--name" && hasVal) o.name = argv[++i];
         else if (a == "--class" && hasVal) {
+            o.clsGiven = true;
             if (!parseClass(argv[++i], o.cls)) {
-                std::fprintf(stderr, "unknown class '%s' (warrior, mage, druid, healer)\n", argv[i]);
+                std::fprintf(stderr, "unknown class '%s' (warrior, mage, druid, healer, rogue, necromancer)\n", argv[i]);
                 return false;
             }
         } else {
             std::fprintf(stderr,
                          "usage: boyz_client [--host H] [--port P] [--name N] "
-                         "[--class warrior|mage|druid|healer]\n");
+                         "[--class warrior|mage|druid|healer|rogue|necromancer]\n");
             return false;
         }
     }
@@ -95,7 +100,7 @@ bool connectToServer(const Options& o, ENetHost*& host, ENetPeer*& peer, MsgWelc
     MsgHello hello{};
     hello.type = MSG_HELLO;
     hello.version = PROTOCOL_VERSION;
-    hello.cls = static_cast<uint8_t>(o.cls);
+    hello.cls = o.clsGiven ? static_cast<uint8_t>(o.cls) : NO_CLASS;
     std::strncpy(hello.name, o.name.c_str(), sizeof(hello.name) - 1);
     sendTo(peer, &hello, sizeof hello, CH_RELIABLE, true);
     enet_host_flush(host);
@@ -130,16 +135,38 @@ struct RemoteSample {
 
 struct Remote {
     std::deque<RemoteSample> samples;
+    // Latest snapshot says they're stealthed out of our sight (position unknown).
+    bool hidden() const { return samples.empty() || samples.back().p.hidden; }
 };
 
-// Position of a remote player at time `t` (in the past), interpolated between snapshots.
-glm::vec3 sampleRemote(const Remote& r, double t) {
+struct MinionTrack {
+    std::deque<std::pair<double, glm::vec3>> samples;
+    uint8_t hpPct = 100;
+    float yaw = 0;
+};
+
+glm::vec3 sampleTrack(const std::deque<std::pair<double, glm::vec3>>& s, double t) {
+    if (t <= s.front().first) return s.front().second;
+    for (size_t i = 0; i + 1 < s.size(); ++i) {
+        if (t >= s[i].first && t <= s[i + 1].first) {
+            float a = static_cast<float>((t - s[i].first) / (s[i + 1].first - s[i].first));
+            return glm::mix(s[i].second, s[i + 1].second, a);
+        }
+    }
+    return s.back().second;
+}
+
+// Position of a remote player at time `t` (in the past), interpolated between
+// snapshots. `yaw` gets the way they faced then (nearest snapshot).
+glm::vec3 sampleRemote(const Remote& r, double t, float& yaw) {
     const auto& s = r.samples;
     auto pos = [](const NetPlayer& p) { return glm::vec3(p.s.x, p.s.y, p.s.z); };
-    if (t <= s.front().t) return pos(s.front().p);
+    yaw = s.back().p.s.yaw;
+    if (t <= s.front().t) { yaw = s.front().p.s.yaw; return pos(s.front().p); }
     for (size_t i = 0; i + 1 < s.size(); ++i) {
         if (t >= s[i].t && t <= s[i + 1].t) {
             float a = static_cast<float>((t - s[i].t) / (s[i + 1].t - s[i].t));
+            yaw = (a < 0.5f ? s[i] : s[i + 1]).p.s.yaw;
             return glm::mix(pos(s[i].p), pos(s[i + 1].p), a);
         }
     }
@@ -155,6 +182,15 @@ glm::vec3 abilityColor(AbilityId id) {
         case AbilityId::Regrowth: return {0.2f, 1.0f, 0.3f};
         case AbilityId::HolyBolt: return {1.0f, 0.85f, 0.25f};
         case AbilityId::Heal: return {1.0f, 0.9f, 0.35f};
+        case AbilityId::Stealth: return {0.45f, 0.4f, 0.5f};
+        case AbilityId::LifeDrain: return {0.75f, 0.1f, 1.0f};
+        case AbilityId::RaiseDead: return {0.35f, 1.0f, 0.55f};
+        case AbilityId::WarCry: return {1.0f, 0.45f, 0.15f};
+        case AbilityId::Blink: return {0.65f, 0.4f, 1.0f};
+        case AbilityId::Entangle: return {0.3f, 0.9f, 0.15f};
+        case AbilityId::HolyNova: return {1.0f, 0.88f, 0.4f};
+        case AbilityId::Shadowstep: return {0.45f, 0.4f, 0.5f};
+        case AbilityId::BoneBurst: return {0.5f, 1.0f, 0.6f};
         default: return {1, 1, 1};
     }
 }
@@ -172,14 +208,75 @@ LightStyle abilityLight(AbilityId id) {
         case AbilityId::HolyBolt: return {7.0f, 1.9f};
         case AbilityId::Regrowth: return {6.0f, 1.6f};
         case AbilityId::Heal: return {7.0f, 2.0f};
+        case AbilityId::LifeDrain: return {6.5f, 1.9f};
+        case AbilityId::RaiseDead: return {7.5f, 2.0f};
+        case AbilityId::WarCry: return {7.0f, 1.6f};
+        case AbilityId::Blink: return {6.0f, 1.8f};
+        case AbilityId::Entangle: return {5.0f, 1.4f};
+        case AbilityId::HolyNova: return {9.0f, 2.2f};
+        case AbilityId::BoneBurst: return {8.5f, 2.2f};
         default: return {4.0f, 1.0f};
     }
 }
 
 bool castsLight(AbilityId id) {
     AbilityKind k = abilityInfo(id).kind;
-    return k == AbilityKind::Projectile || k == AbilityKind::SelfHeal || k == AbilityKind::HealOverTime;
+    return k == AbilityKind::Projectile || k == AbilityKind::SelfHeal || k == AbilityKind::HealOverTime ||
+           k == AbilityKind::Summon || k == AbilityKind::Blink || k == AbilityKind::Nova;
 }
+
+// Kill streak names, announced to everyone.
+const char* streakName(int n) {
+    if (n >= 10) return "GODLIKE";
+    if (n >= 7) return "UNSTOPPABLE";
+    if (n >= 5) return "RAMPAGE";
+    return "KILLING SPREE";
+}
+
+// A body left where someone died: briefly the collapsing frame, then a corpse.
+struct Corpse {
+    glm::vec3 pos;
+    glm::vec3 tint;
+    float yaw;
+    double t0;
+    bool skeleton;
+};
+constexpr double CORPSE_COLLAPSE_TIME = 0.2;
+constexpr double CORPSE_LIFETIME = 15.0;
+
+// Rising number over whatever you hit.
+struct DamageNumber {
+    glm::vec3 pos;
+    std::string text;
+    glm::vec3 color;
+    double t0;
+};
+constexpr double DAMAGE_NUMBER_TIME = 0.9;
+
+// Walking animation for someone we only see through snapshots: strides are
+// timed by how far they've actually moved.
+struct WalkAnim {
+    glm::vec3 last{0};
+    bool hasLast = false;
+    float dist = 0;
+    double lastMoveT = -1;
+    int frame(double t) const {
+        if (t - lastMoveT > 0.12) return FRAME_STAND;
+        static const int kCycle[4] = {FRAME_STRIDE_A, FRAME_STAND, FRAME_STRIDE_B, FRAME_STAND};
+        return kCycle[static_cast<int>(dist / 0.45f) % 4];
+    }
+    void update(glm::vec3 pos, double t) {
+        if (hasLast) {
+            float d = glm::length(glm::vec2(pos.x - last.x, pos.z - last.z));
+            if (d < 2.0f) {  // bigger = a teleport, not a step
+                dist += d;
+                if (d > 1e-3f) lastMoveT = t;
+            }
+        }
+        last = pos;
+        hasLast = true;
+    }
+};
 
 struct Burst {  // short-lived expanding glow (impacts, hits, heals)
     glm::vec3 pos;
@@ -260,8 +357,22 @@ WeaponPose weaponPose(bool sword, AbilityKind kind, double since, float walkPhas
                 w.glow = 1.0f + 1.5f * static_cast<float>(1.0 - since / 0.25);
             }
             break;
+        case AbilityKind::Blink:  // same jab as a spell
+            if (since < 0.25) {
+                float b = bump(0.25);
+                w.offset += glm::vec2(-25 * b, 20 * b);
+                w.glow = 1.0f + 1.5f * static_cast<float>(1.0 - since / 0.25);
+            }
+            break;
+        case AbilityKind::Stealth:  // tuck the blade away
+        case AbilityKind::Shadowstep:
+            if (since < 0.4) { float b = bump(0.4); w.offset.y -= 50 * b; w.offset.x += 20 * b; }
+            break;
         case AbilityKind::SelfHeal:
-        case AbilityKind::HealOverTime:  // raise the staff overhead
+        case AbilityKind::HealOverTime:
+        case AbilityKind::Nova:
+        case AbilityKind::Detonate:
+        case AbilityKind::Summon:  // raise the staff overhead
             if (since < 0.6) { float b = bump(0.6); w.offset.y += 45 * b; w.glow = 1.0f + 2.0f * b; }
             break;
     }
@@ -274,6 +385,7 @@ int main(int argc, char** argv) {
     Options opt;
     if (!parseArgs(argc, argv, opt)) return 1;
 
+    if (!opt.clsGiven && SDL_getenv("BOYZ_BOT")) opt.clsGiven = true;  // bots don't use menus
     if (enet_initialize() != 0) { std::fprintf(stderr, "enet_initialize failed\n"); return 1; }
     ENetHost* net = nullptr;
     ENetPeer* server = nullptr;
@@ -296,7 +408,8 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
-    std::printf("joined as player #%d (%s) on map '%s'\n", myId, classInfo(opt.cls).name, welcome.mapName);
+    std::printf("joined as player #%d (%s) on map '%s'\n", myId, opt.clsGiven ? classInfo(opt.cls).name : "choosing a class",
+                welcome.mapName);
 
     if (!SDL_Init(SDL_INIT_VIDEO)) { SDL_Log("SDL_Init: %s", SDL_GetError()); return 1; }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -322,13 +435,18 @@ int main(int argc, char** argv) {
     bool haveServerState = false;
     float viewYaw = 0, viewPitch = 0;
     float myHp = classInfo(opt.cls).maxHp;
-    uint16_t myKills = 0, myDeaths = 0;
+    // The server decides our class; these follow its snapshots.
+    PlayerClass myCls = opt.cls;
+    bool picking = !opt.clsGiven;     // spectating until we choose a class
+    uint8_t myNextCls = NO_CLASS;     // switching to this at the next respawn
+    bool classMenu = picking;
+    uint16_t myKills = 0, myDeaths = 0, myScore = 0;
+    uint8_t myStreak = 0;
     uint32_t inputSeq = 0;
     std::deque<InputCmd> pending;  // sent but not yet acknowledged by the server
-    const ClassInfo& myClass = classInfo(opt.cls);
-    const bool hasSword = opt.cls == PlayerClass::Warrior;
 
     std::map<uint8_t, Remote> remotes;
+    std::map<uint8_t, MinionTrack> minions;  // by owner
     std::map<uint8_t, std::string> names;
     std::map<uint8_t, PlayerClass> classes;
     std::deque<KillFeedEntry> killFeed;
@@ -340,6 +458,15 @@ int main(int argc, char** argv) {
     std::vector<std::pair<NetProjectile, double>> projectiles;  // latest snapshot + receive time
     std::vector<Burst> bursts;
     std::vector<Flash> flashes;
+    std::deque<Corpse> corpses;
+    std::vector<DamageNumber> damageNumbers;
+    std::map<uint8_t, WalkAnim> walkAnims, minionWalkAnims;
+    CenterMessage announce;       // kill streaks etc., above the personal centre message
+    bool nextDamageBig = false;   // the next damage we deal was a combo / backstab
+    float trauma = 0;             // screen shake, 0..1
+    auto addShake = [&](float amount) { trauma = std::min(1.0f, trauma + amount); };
+    double hitStopCast = -1;      // castT of the swing that already got its hit-stop
+    double lastFrameT = -1;
 
     // Feedback timers (time of last occurrence).
     double hitMarkerT = -1, hurtT = -1, healT = -1, castT = -1;
@@ -366,7 +493,7 @@ int main(int argc, char** argv) {
         return it != names.end() ? it->second : "player" + std::to_string(id);
     };
     auto updateTitle = [&] {
-        std::string title = "boyzpvp - " + opt.name + " the " + myClass.name + "   |   kills " +
+        std::string title = "boyzpvp - " + opt.name + (picking ? std::string(" (choosing a class)") : std::string(" the ") + classInfo(myCls).name) + "   |   kills " +
                             std::to_string(myKills) + "   deaths " + std::to_string(myDeaths);
         SDL_SetWindowTitle(window, title.c_str());
     };
@@ -376,7 +503,9 @@ int main(int argc, char** argv) {
         MsgSnapshotHeader hdr;
         if (n < sizeof hdr) return;
         std::memcpy(&hdr, d, sizeof hdr);
-        if (n < sizeof hdr + hdr.playerCount * sizeof(NetPlayer) + hdr.projCount * sizeof(NetProjectile)) return;
+        if (n < sizeof hdr + hdr.playerCount * sizeof(NetPlayer) + hdr.projCount * sizeof(NetProjectile) +
+                    hdr.minionCount * sizeof(NetMinion))
+            return;
         double t = now();
         std::set<uint8_t> seen;
         const uint8_t* p = d + sizeof hdr;
@@ -389,6 +518,16 @@ int main(int argc, char** argv) {
                 // every input the server hasn't processed yet.
                 myHp = np.hp;
                 myPing = np.ping;
+                myNextCls = np.nextCls;
+                myScore = np.score;
+                myStreak = np.streak;
+                bool nowPicking = np.cls == NO_CLASS;
+                PlayerClass cls = nowPicking ? myCls : static_cast<PlayerClass>(np.cls);
+                if (nowPicking != picking || cls != myCls) {
+                    picking = nowPicking;
+                    myCls = cls;
+                    updateTitle();
+                }
                 if (np.kills != myKills || np.deaths != myDeaths) {
                     myKills = np.kills;
                     myDeaths = np.deaths;
@@ -396,7 +535,7 @@ int main(int argc, char** argv) {
                 }
                 pred = np.s;
                 while (!pending.empty() && pending.front().seq <= np.lastInputSeq) pending.pop_front();
-                for (const InputCmd& c : pending) simulate(pred, c, opt.cls, TICK_DT);  // ignore re-fired abilities
+                for (const InputCmd& c : pending) simulate(pred, c, myCls, TICK_DT);  // ignore re-fired abilities
                 pred.yaw = viewYaw;
                 pred.pitch = viewPitch;
                 if (!haveServerState) {
@@ -414,6 +553,8 @@ int main(int argc, char** argv) {
                     prevPred = pred;
             } else {
                 auto& r = remotes[np.id];
+                // Don't interpolate from where they vanished to where they reappear.
+                if (!np.hidden && !r.samples.empty() && r.samples.back().p.hidden) r.samples.clear();
                 r.samples.push_back({t, np});
                 while (r.samples.size() > 32) r.samples.pop_front();
             }
@@ -426,6 +567,22 @@ int main(int argc, char** argv) {
             std::memcpy(&np, p, sizeof np);
             projectiles.push_back({np, t});
         }
+        std::set<uint8_t> seenMinions;
+        for (int i = 0; i < hdr.minionCount; ++i, p += sizeof(NetMinion)) {
+            NetMinion nm;
+            std::memcpy(&nm, p, sizeof nm);
+            seenMinions.insert(nm.owner);
+            MinionTrack& m = minions[nm.owner];
+            glm::vec3 pos(nm.x, nm.y, nm.z);
+            // A freshly raised one replaces the old: don't slide between them.
+            if (!m.samples.empty() && glm::distance(m.samples.back().second, pos) > 3.0f) m.samples.clear();
+            m.samples.push_back({t, pos});
+            while (m.samples.size() > 32) m.samples.pop_front();
+            m.hpPct = nm.hpPct;
+            m.yaw = nm.yaw;
+        }
+        for (auto it = minions.begin(); it != minions.end();)
+            it = seenMinions.count(it->first) ? std::next(it) : minions.erase(it);
     };
 
     auto onEvents = [&](const uint8_t* d, size_t n) {
@@ -440,7 +597,17 @@ int main(int argc, char** argv) {
             AbilityId ab = static_cast<AbilityId>(e.ability);
             glm::vec3 pos(e.x, e.y, e.z);
             switch (e.type) {
-                case EV_ATTACK:
+                case EV_ATTACK: {
+                    const glm::vec3 chest = pos + glm::vec3(0, PLAYER_HEIGHT * 0.5f, 0);
+                    if (ab == AbilityId::Stealth || ab == AbilityId::Shadowstep)  // puff of smoke where they vanished
+                        bursts.push_back({chest, abilityColor(ab), t, 0.6, 1.8f});
+                    if (ab == AbilityId::Blink) bursts.push_back({chest, abilityColor(ab), t, 0.35, 1.4f, 5.0f});
+                    if (ab == AbilityId::WarCry || ab == AbilityId::HolyNova) {
+                        float radius = abilityInfo(ab).range;
+                        bursts.push_back({chest, abilityColor(ab), t, 0.45, radius * 1.6f, abilityLight(ab).radius});
+                        if (e.a == myId || glm::distance(pos, glm::vec3(pred.x, pred.y, pred.z)) < radius)
+                            addShake(e.a == myId ? 0.25f : 0.35f);
+                    }
                     if (e.a != myId) {
                         remoteAttackT[e.a] = t;
                         if (castsLight(ab)) {
@@ -450,15 +617,44 @@ int main(int argc, char** argv) {
                         }
                     }
                     break;
+                }
                 case EV_IMPACT: {
-                    float size = std::max(0.5f, abilityInfo(ab).splashRadius * 0.9f);
-                    bursts.push_back({pos, abilityColor(ab), t, 0.3, size, abilityLight(ab).radius * 1.3f});
+                    const AbilityInfo& ai = abilityInfo(ab);
+                    float splash = ai.kind == AbilityKind::Detonate ? ai.range : ai.splashRadius;
+                    float size = std::max(0.5f, splash * 0.9f);
+                    bursts.push_back({pos, abilityColor(ab), t, splash > 3 ? 0.45 : 0.3, size, abilityLight(ab).radius * 1.3f});
+                    // Big explosions nearby rattle the screen.
+                    float camDist = glm::distance(pos, glm::vec3(pred.x, pred.y + EYE_HEIGHT, pred.z));
+                    if (splash > 1.0f && camDist < splash * 2.5f) addShake(0.45f * (1.0f - camDist / (splash * 2.5f)));
                     break;
                 }
                 case EV_DAMAGE:
-                    if (e.b == myId) hurtT = t;
-                    else remoteHurtT[e.b] = t;
-                    if (e.a == myId && e.b != myId) hitMarkerT = t;
+                    if (e.b == myId) {
+                        hurtT = t;
+                        addShake(std::min(0.6f, e.amount / 45.0f));
+                    } else {
+                        remoteHurtT[e.b] = t;
+                    }
+                    if (e.a == myId && e.b != myId) {
+                        bool claw = ab == AbilityId::SkeletonClaw;
+                        if (!claw) hitMarkerT = t;
+                        glm::vec3 c = nextDamageBig ? glm::vec3(1.0f, 0.55f, 0.15f)
+                                      : claw        ? glm::vec3(0.6f, 0.75f, 0.6f)
+                                                    : glm::vec3(1.0f, 0.9f, 0.4f);
+                        std::string txt = std::to_string(e.amount) + (nextDamageBig ? "!" : "");
+                        // Spread numbers a little so rapid hits don't stack into one blob.
+                        float jx = static_cast<float>(damageNumbers.size() % 3) * 0.2f - 0.2f;
+                        damageNumbers.push_back({pos + glm::vec3(jx, 0.5f, 0), txt, c, t});
+                        nextDamageBig = false;
+                        // Melee hits land with a jolt: a short freeze of the swing and a shake.
+                        if (abilityInfo(ab).kind == AbilityKind::Melee && !claw) {
+                            addShake(0.18f);
+                            if (castT >= 0 && t - castT < 0.35 && hitStopCast != castT) {
+                                castT += 0.07;
+                                hitStopCast = castT;
+                            }
+                        }
+                    }
                     // Your own hits/heals use a screen flash instead of an in-your-face puff.
                     if (e.b != myId) bursts.push_back({pos, {0.8f, 0.08f, 0.05f}, t, 0.2, 0.45f});
                     break;
@@ -470,9 +666,72 @@ int main(int argc, char** argv) {
                         bursts.push_back({pos, abilityColor(ab), t, 0.5, 1.3f, abilityLight(ab).radius});
                     }
                     break;
+                case EV_COMBO: {
+                    const char* combo = abilityInfo(ab).comboName ? abilityInfo(ab).comboName : "COMBO";
+                    if (e.a == myId) {
+                        centerMsg = {std::string(combo) + "!", {1.0f, 0.6f, 0.2f}, t, 1.0};
+                        nextDamageBig = true;
+                        addShake(0.3f);
+                    } else if (e.b == myId) {
+                        centerMsg = {std::string(combo) + " BY " + upper(nameOf(e.a)), {1.0f, 0.35f, 0.3f}, t, 1.5};
+                    }
+                    bursts.push_back({pos, abilityColor(ab), t, 0.3, 1.2f, 5.0f});
+                    break;
+                }
+                case EV_STREAK: {
+                    std::string name = streakName(e.amount);
+                    if (e.a == myId)
+                        announce = {name + "! " + std::to_string(e.amount) + " KILLS - BOUNTY ON YOUR HEAD", {1.0f, 0.75f, 0.2f}, t, 3.0};
+                    else
+                        announce = {upper(nameOf(e.a)) + " IS ON A " + name + " (" + std::to_string(e.amount) + ")", {1.0f, 0.75f, 0.2f}, t, 3.0};
+                    break;
+                }
+                case EV_SHUTDOWN: {
+                    int bonus = e.amount - STREAK_BOUNTY_MIN + 1;
+                    if (e.a == myId)
+                        announce = {"BOUNTY COLLECTED: +" + std::to_string(bonus) + " POINTS", {1.0f, 0.85f, 0.3f}, t, 3.0};
+                    else
+                        announce = {upper(nameOf(e.a)) + " ENDED " + upper(nameOf(e.b)) + "'S STREAK OF " + std::to_string(e.amount),
+                                    {1.0f, 0.75f, 0.2f}, t, 3.0};
+                    break;
+                }
+                case EV_TELEPORT:
+                    if (e.a == myId) {  // face the victim
+                        viewYaw = pred.yaw = e.amount / 1000.0f;
+                        prevPred = pred;
+                    }
+                    if (e.b != NO_PLAYER)
+                        bursts.push_back({pos + glm::vec3(0, PLAYER_HEIGHT * 0.5f, 0), abilityColor(ab), t, 0.5, 1.6f});
+                    break;
+                case EV_BACKSTAB:
+                    if (e.a == myId) {
+                        centerMsg = {"BACKSTAB!", {1.0f, 0.8f, 0.2f}, t, 1.0};
+                        nextDamageBig = true;
+                        addShake(0.35f);
+                    }
+                    else if (e.b == myId) centerMsg = {"BACKSTABBED BY " + upper(nameOf(e.a)), {1.0f, 0.35f, 0.3f}, t, 1.5};
+                    bursts.push_back({pos, {1.0f, 0.75f, 0.2f}, t, 0.25, 0.8f, 4.0f});
+                    break;
+                case EV_MINION_DIE: {
+                    float yaw = 0;
+                    if (auto mi = minions.find(e.a); mi != minions.end()) yaw = mi->second.yaw;
+                    corpses.push_back({pos - glm::vec3(0, MINION_HEIGHT * 0.5f, 0), glm::vec3(0.3f), yaw, t, true});
+                    bursts.push_back({pos, {0.85f, 0.8f, 0.65f}, t, 0.5, 1.4f});
+                    bursts.push_back({pos, abilityColor(AbilityId::RaiseDead), t, 0.35, 0.8f, 5.0f});
+                    break;
+                }
                 case EV_KILL:
                     killFeed.push_back({t, e.a, e.b, ab});
                     while (killFeed.size() > 5) killFeed.pop_front();
+                    if (e.b != myId) {  // leave a body (ours would be under the camera)
+                        glm::vec3 tint = glm::vec3(0.8f);
+                        float yaw = 0;
+                        if (auto ci = classes.find(e.b); ci != classes.end()) tint = classColor(ci->second);
+                        if (auto ri = remotes.find(e.b); ri != remotes.end() && !ri->second.samples.empty())
+                            yaw = ri->second.samples.back().p.s.yaw;
+                        corpses.push_back({pos, tint, yaw, t, false});
+                        bursts.push_back({pos + glm::vec3(0, 0.9f, 0), {0.7f, 0.05f, 0.03f}, t, 0.35, 1.3f});
+                    }
                     if (e.b == myId) {
                         deathT = t;
                         killedByText = (e.a == e.b || e.a == NO_PLAYER)
@@ -497,12 +756,13 @@ int main(int argc, char** argv) {
         if (n < sizeof m) return;
         std::memcpy(&m, d, sizeof m);
         m.name[sizeof(m.name) - 1] = 0;
+        bool known = names.count(m.id) > 0;
         names[m.id] = m.name;
         classes[m.id] = static_cast<PlayerClass>(m.cls);
-        if (m.id != myId) {
-            std::printf("  %s joined as %s\n", m.name, classInfo(static_cast<PlayerClass>(m.cls)).name);
-            std::fflush(stdout);
-        }
+        const char* clsName = m.cls == NO_CLASS ? "spectator" : classInfo(static_cast<PlayerClass>(m.cls)).name;
+        if (!known && m.id != myId) std::printf("  %s joined as %s\n", m.name, clsName);
+        else if (known && m.cls != NO_CLASS) std::printf("  %s is now a %s\n", m.name, clsName);
+        std::fflush(stdout);
     };
 
     while (running) {
@@ -511,13 +771,23 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&e)) {
             switch (e.type) {
                 case SDL_EVENT_QUIT: running = false; break;
-                case SDL_EVENT_KEY_DOWN:
-                    if (e.key.scancode == SDL_SCANCODE_F12) wantShot = true;
-                    if (e.key.scancode == SDL_SCANCODE_ESCAPE) {
-                        if (grabbed) { grabbed = false; SDL_SetWindowRelativeMouseMode(window, false); }
+                case SDL_EVENT_KEY_DOWN: {
+                    const SDL_Scancode sc = e.key.scancode;
+                    if (sc == SDL_SCANCODE_F12) wantShot = true;
+                    const int numClasses = static_cast<int>(PlayerClass::Count);
+                    if (sc == SDL_SCANCODE_C && !e.key.repeat && !picking) {
+                        classMenu = !classMenu;
+                    } else if ((classMenu || picking) && sc >= SDL_SCANCODE_1 && sc < SDL_SCANCODE_1 + numClasses) {
+                        MsgChangeClass m{MSG_CHANGE_CLASS, static_cast<uint8_t>(sc - SDL_SCANCODE_1)};
+                        sendTo(server, &m, sizeof m, CH_RELIABLE, true);
+                        classMenu = false;
+                    } else if (sc == SDL_SCANCODE_ESCAPE) {
+                        if (classMenu && !picking) classMenu = false;
+                        else if (grabbed) { grabbed = false; SDL_SetWindowRelativeMouseMode(window, false); }
                         else running = false;
                     }
                     break;
+                }
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
                     if (!grabbed) { grabbed = true; SDL_SetWindowRelativeMouseMode(window, true); }
                     break;
@@ -572,11 +842,13 @@ int main(int argc, char** argv) {
                 if (keys[SDL_SCANCODE_SPACE]) cmd.buttons |= BTN_JUMP;
                 if (mouse & SDL_BUTTON_LMASK) cmd.buttons |= BTN_PRIMARY;
                 if (mouse & SDL_BUTTON_RMASK) cmd.buttons |= BTN_SECONDARY;
+                if (keys[SDL_SCANCODE_Q]) cmd.buttons |= BTN_TERTIARY;
             }
             if (botMode && pred.alive) {
                 float best = 1e9f;
+                glm::vec3 targetPos(0);
                 for (const auto& [id, r] : remotes) {
-                    if (r.samples.empty()) continue;
+                    if (r.hidden()) continue;
                     const NetPlayer& o = r.samples.back().p;
                     float dx = o.s.x - pred.x, dz = o.s.z - pred.z;
                     float dist = std::hypot(dx, dz);
@@ -584,13 +856,29 @@ int main(int argc, char** argv) {
                         !lineOfSight(pred.x, pred.y + EYE_HEIGHT, pred.z, o.s.x, o.s.y + PLAYER_HEIGHT * 0.5f, o.s.z))
                         continue;
                     best = dist;
+                    targetPos = glm::vec3(o.s.x, o.s.y, o.s.z);
                     float dy = (o.s.y + PLAYER_HEIGHT * 0.5f) - (pred.y + EYE_HEIGHT - 0.15f);
                     viewYaw = std::atan2(dx, -dz);
                     viewPitch = std::atan2(dy, dist);
                 }
+                const bool meleeBot = abilityInfo(classInfo(myCls).abilities[0]).kind == AbilityKind::Melee;
+                AbilityKind second = abilityInfo(classInfo(myCls).abilities[1]).kind;
                 if (best < 1e9f) {
                     cmd.buttons |= BTN_PRIMARY;
-                    if (best > 2.0f && opt.cls == PlayerClass::Warrior) cmd.forward = 1;
+                    AbilityKind third = abilityInfo(classInfo(myCls).abilities[2]).kind;
+                    if (third == AbilityKind::Detonate) {  // when the skeleton has caught up with them
+                        auto mi = minions.find(myId);
+                        if (mi != minions.end() && glm::distance(mi->second.samples.back().second, targetPos) < 2.5f)
+                            cmd.buttons |= BTN_TERTIARY;
+                    } else if (best < 8.0f) {
+                        cmd.buttons |= BTN_TERTIARY;
+                    }
+                    // Frostbolt alongside fireball sets up shatters; keep a skeleton up.
+                    if (second == AbilityKind::Projectile || (second == AbilityKind::Summon && !minions.count(myId)))
+                        cmd.buttons |= BTN_SECONDARY;
+                    if (best > 2.0f && meleeBot) cmd.forward = 1;
+                } else if (second == AbilityKind::Stealth || second == AbilityKind::Summon) {
+                    cmd.buttons |= BTN_SECONDARY;  // nobody in sight: stealth up / raise a skeleton
                 }
             }
             cmd.yaw = viewYaw;
@@ -598,12 +886,13 @@ int main(int argc, char** argv) {
 
             prevPred = pred;
             if (haveServerState) {
-                uint8_t fired = simulate(pred, cmd, opt.cls, TICK_DT);
+                uint8_t fired = simulate(pred, cmd, myCls, TICK_DT);
                 if (fired) {
-                    int slot = (fired & 1) ? 0 : 1;
+                    int slot = (fired & 1) ? 0 : (fired & 2) ? 1 : 2;
                     castT = t;
-                    castAbility = myClass.abilities[slot];
+                    castAbility = classInfo(myCls).abilities[slot];
                     castKind = abilityInfo(castAbility).kind;
+                    if (castAbility == AbilityId::WarCry) castKind = AbilityKind::Summon;  // weapon raised overhead
                     if (castsLight(castAbility)) {
                         float dx, dy, dz;
                         viewDir(viewYaw, viewPitch, dx, dy, dz);
@@ -629,19 +918,86 @@ int main(int argc, char** argv) {
         const bool alive = pred.alive || !haveServerState;
         float alpha = static_cast<float>(acc / TICK_DT);
         glm::vec3 feet = glm::mix(glm::vec3(prevPred.x, prevPred.y, prevPred.z), glm::vec3(pred.x, pred.y, pred.z), alpha);
-        Camera cam{feet + glm::vec3(0, alive ? EYE_HEIGHT : 0.35f, 0), viewYaw, viewPitch};
+        Camera cam{feet + glm::vec3(0, alive || picking ? EYE_HEIGHT : 0.35f, 0), viewYaw, viewPitch};
+        {
+            float frameDt = lastFrameT < 0 ? 0.0f : static_cast<float>(t - lastFrameT);
+            lastFrameT = t;
+            trauma = std::max(0.0f, trauma - frameDt * 1.8f);
+            float shake = trauma * trauma;
+            float ft = static_cast<float>(t);
+            cam.yaw += 0.04f * shake * std::sin(ft * 53.0f);
+            cam.pitch += 0.04f * shake * std::sin(ft * 67.0f + 1.3f);
+            cam.eye.y += 0.05f * shake * std::sin(ft * 41.0f + 2.1f);
+        }
+        const ClassInfo& myClass = classInfo(myCls);
+        const bool hasSword = myCls == PlayerClass::Warrior || myCls == PlayerClass::Rogue;
 
         std::vector<Billboard> billboards;
         double renderT = t - INTERP_DELAY;
         for (const auto& [id, r] : remotes) {
-            if (r.samples.empty() || !r.samples.back().p.s.alive) continue;
+            if (r.hidden() || !r.samples.back().p.s.alive) continue;
             PlayerClass c = static_cast<PlayerClass>(r.samples.back().p.cls);
-            Billboard b{sampleRemote(r, renderT), PLAYER_HEIGHT * 0.5f, PLAYER_HEIGHT, classColor(c), SpriteTex::Player};
+            float yaw;
+            const NetPlayer& latest = r.samples.back().p;
+            Billboard b{sampleRemote(r, renderT, yaw), PLAYER_HEIGHT * 0.5f, PLAYER_HEIGHT, classColor(c), SpriteTex::Player};
+            b.directional = true;
+            b.facingYaw = yaw;
+            WalkAnim& anim = walkAnims[id];
+            anim.update(b.base, t);
+            b.frame = latest.s.onGround ? anim.frame(t) : FRAME_STRIDE_A;
+            // Status effects show on the body: icy blue when slowed, green when rooted.
+            if (latest.s.rootTicks) b.tint = glm::mix(b.tint, glm::vec3(0.35f, 1.0f, 0.25f), 0.6f);
+            else if (latest.s.slowTicks) b.tint = glm::mix(b.tint, glm::vec3(0.45f, 0.75f, 1.3f), 0.55f);
+            // A bounty: a gold light bobbing over their head.
+            if (latest.streak >= STREAK_BOUNTY_MIN && !latest.s.stealthTicks) {
+                float bob = 0.06f * std::sin(static_cast<float>(t) * 4.0f + id);
+                billboards.push_back({b.base + glm::vec3(0, PLAYER_HEIGHT + 0.3f + bob, 0), 0.32f, 0.32f,
+                                      glm::vec3(1.0f, 0.75f, 0.15f), SpriteTex::Orb, 1.6f});
+            }
+            // Stealthed but close enough to notice: a faint shimmer.
+            if (r.samples.back().p.s.stealthTicks)
+                b.opacity = 0.2f + 0.08f * std::sin(static_cast<float>(t) * 9.0f + id);
             auto hurt = remoteHurtT.find(id);
             if (hurt != remoteHurtT.end() && t - hurt->second < 0.15) b.tint *= glm::vec3(2.0f, 0.45f, 0.45f);
             auto atk = remoteAttackT.find(id);
             if (atk != remoteAttackT.end() && t - atk->second < 0.2) b.brightness = 1.5f;
             billboards.push_back(b);
+        }
+        for (const auto& [owner, m] : minions) {
+            if (m.samples.empty()) continue;
+            // Eyes glow green for your own skeleton, red for everyone else's.
+            glm::vec3 eyes = owner == myId ? glm::vec3(0.4f, 1.6f, 0.6f) : glm::vec3(1.8f, 0.3f, 0.2f);
+            glm::vec3 pos = sampleTrack(m.samples, renderT);
+            Billboard b{pos, MINION_HEIGHT * 0.5f, MINION_HEIGHT, eyes, SpriteTex::Skeleton};
+            b.directional = true;
+            b.facingYaw = m.yaw;
+            WalkAnim& anim = minionWalkAnims[owner];
+            anim.update(pos, t);
+            b.frame = anim.frame(t);
+            billboards.push_back(b);
+        }
+        for (auto it = walkAnims.begin(); it != walkAnims.end();)
+            it = remotes.count(it->first) ? std::next(it) : walkAnims.erase(it);
+        for (auto it = minionWalkAnims.begin(); it != minionWalkAnims.end();)
+            it = minions.count(it->first) ? std::next(it) : minionWalkAnims.erase(it);
+        // Bodies: a moment of collapsing, then lying there until they fade out.
+        while (!corpses.empty() && (t - corpses.front().t0 > CORPSE_LIFETIME || corpses.size() > 24)) corpses.pop_front();
+        for (const Corpse& c : corpses) {
+            double age = t - c.t0;
+            if (age < CORPSE_COLLAPSE_TIME) {
+                float h = c.skeleton ? MINION_HEIGHT : PLAYER_HEIGHT;
+                Billboard b{c.pos, h * 0.5f, h, c.skeleton ? glm::vec3(1.0f, 0.3f, 0.2f) : c.tint,
+                            c.skeleton ? SpriteTex::Skeleton : SpriteTex::Player};
+                b.directional = true;
+                b.facingYaw = c.yaw;
+                b.frame = FRAME_COLLAPSE;
+                billboards.push_back(b);
+                continue;
+            }
+            const float len = c.skeleton ? 1.5f : 1.8f;
+            Billboard b{c.pos, len, len * 0.5f, c.tint, c.skeleton ? SpriteTex::SkeletonCorpse : SpriteTex::PlayerCorpse};
+            b.opacity = static_cast<float>(std::clamp((CORPSE_LIFETIME - age) / 2.0, 0.0, 1.0));
+            if (b.opacity > 0.02f) billboards.push_back(b);
         }
         for (const auto& [p, recvT] : projectiles) {
             // Extrapolate along the (straight) flight path since the snapshot.
@@ -714,21 +1070,24 @@ int main(int argc, char** argv) {
         Hud hud;
         hud.weaponLight = glm::min(weaponLight, glm::vec3(2.0f));
         hud.hpFrac = myHp / myClass.maxHp;
-        hud.classColor = classColor(opt.cls);
+        hud.classColor = classColor(myCls);
         for (int slot = 0; slot < NUM_ABILITY_SLOTS; ++slot) {
             float total = abilityInfo(myClass.abilities[slot]).cooldownTicks;
             hud.ready[slot] = total > 0 ? 1.0f - pred.cooldown[slot] / total : 1.0f;
         }
-        hud.showWeapon = alive;
-        hud.weapon = hasSword ? WeaponTex::Sword : WeaponTex::Staff;
+        hud.showWeapon = alive && !picking;
+        hud.showStatus = !picking;
+        hud.weapon = myCls == PlayerClass::Rogue ? WeaponTex::Dagger : hasSword ? WeaponTex::Sword : WeaponTex::Staff;
         WeaponPose pose = weaponPose(hasSword, castKind, castT < 0 ? -1.0 : t - castT, walkPhase);
         hud.weaponOffset = pose.offset;
         hud.weaponAngle = pose.angle;
         hud.weaponGlow = pose.glow;
         hud.hitMarker = hitMarkerT >= 0 && t - hitMarkerT < 0.15;
-        if (!alive) hud.flash = {0.35f, 0.0f, 0.0f, 0.55f};
+        if (!alive && !picking) hud.flash = {0.35f, 0.0f, 0.0f, 0.55f};
         else if (hurtT >= 0 && t - hurtT < 0.3) hud.flash = {0.8f, 0.05f, 0.0f, 0.25f * static_cast<float>(1.0 - (t - hurtT) / 0.3)};
         else if (healT >= 0 && t - healT < 0.4) hud.flash = {0.3f, 1.0f, 0.4f, 0.2f * static_cast<float>(1.0 - (t - healT) / 0.4)};
+        else if (alive && pred.stealthTicks) hud.flash = {0.15f, 0.1f, 0.25f, 0.3f};
+        if (alive && pred.stealthTicks) hud.weaponOpacity = 0.4f;
 
         // --- Text HUD: kill feed, centre messages, scoreboard ---
         auto colorOf = [&](uint8_t id) {
@@ -766,34 +1125,90 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Status lines above the health bar.
+        {
+            int y = RETRO_H - 24;
+            if (alive && pred.stealthTicks) {
+                int secs = static_cast<int>(std::ceil(pred.stealthTicks * TICK_DT));
+                text(6, y, "STEALTHED " + std::to_string(secs), {0.75f, 0.65f, 0.95f});
+                y -= LINE_HEIGHT + 1;
+            }
+            if (alive && pred.rootTicks) {
+                text(6, y, "ROOTED", {0.45f, 1.0f, 0.35f});
+                y -= LINE_HEIGHT + 1;
+            } else if (alive && pred.slowTicks) {
+                text(6, y, "SLOWED", {0.5f, 0.75f, 1.0f});
+                y -= LINE_HEIGHT + 1;
+            }
+            if (alive && myStreak >= STREAK_BOUNTY_MIN) {
+                text(6, y, "BOUNTY ON YOU: " + std::to_string(myStreak) + " KILLS", {1.0f, 0.75f, 0.2f});
+                y -= LINE_HEIGHT + 1;
+            }
+            if (auto it = minions.find(myId); it != minions.end()) {
+                text(6, y, "SKELETON " + std::to_string(it->second.hpPct) + "%", abilityColor(AbilityId::RaiseDead));
+                y -= LINE_HEIGHT + 1;
+            }
+            if (alive && myNextCls < static_cast<uint8_t>(PlayerClass::Count)) {
+                PlayerClass nc = static_cast<PlayerClass>(myNextCls);
+                text(6, y, "NEXT LIFE: " + upper(classInfo(nc).name), classColor(nc));
+            }
+        }
+
         // Centre messages.
-        if (haveServerState && !pred.alive && deathT >= 0) {
+        if (haveServerState && !pred.alive && !picking && deathT >= 0) {
             // Below the scoreboard, which opens automatically while dead.
             centered(RETRO_H - 50, killedByText, {1.0f, 0.35f, 0.3f});
             int secs = std::max(1, static_cast<int>(std::ceil(RESPAWN_TICKS * TICK_DT - (t - deathT))));
             centered(RETRO_H - 39, "RESPAWN IN " + std::to_string(secs), glm::vec3(0.8f));
+            if (!classMenu) centered(RETRO_H - 28, "PRESS C TO CHANGE CLASS", glm::vec3(0.6f));
         } else if (t - centerMsg.t0 < centerMsg.duration) {
             centered(RETRO_H / 2 - 30, centerMsg.text, centerMsg.color);
         }
+        if (t - announce.t0 < announce.duration) {
+            // While dead the scoreboard covers the middle: go just above the death text instead.
+            bool dead = haveServerState && !pred.alive && !picking;
+            centered(dead ? RETRO_H - 62 : RETRO_H / 2 - 44, announce.text, announce.color);
+        }
+
+        // Damage numbers float up from what you hit (hidden behind full-screen panels).
+        const bool* kb = SDL_GetKeyboardState(nullptr);
+        const bool menuShown = classMenu || picking;
+        const bool boardShown = kb[SDL_SCANCODE_TAB] || (haveServerState && !pred.alive && !picking && !menuShown);
+        damageNumbers.erase(std::remove_if(damageNumbers.begin(), damageNumbers.end(),
+                                           [&](const DamageNumber& d) { return t - d.t0 > DAMAGE_NUMBER_TIME; }),
+                            damageNumbers.end());
+        {
+            glm::mat4 vp = cameraViewProj(cam, static_cast<float>(RETRO_W) / RETRO_H);
+            for (const DamageNumber& d : damageNumbers) {
+                if (boardShown || menuShown) break;
+                float age = static_cast<float>(t - d.t0);
+                glm::vec4 clip = vp * glm::vec4(d.pos + glm::vec3(0, age * 0.9f, 0), 1.0f);
+                if (clip.w < 0.1f) continue;
+                int sx = static_cast<int>((clip.x / clip.w * 0.5f + 0.5f) * RETRO_W);
+                int sy = static_cast<int>((0.5f - clip.y / clip.w * 0.5f) * RETRO_H);
+                float fade = 1.0f - 0.6f * age / static_cast<float>(DAMAGE_NUMBER_TIME);
+                text(sx - textWidth(d.text) / 2, sy, d.text, d.color * fade);
+            }
+        }
 
         // Scoreboard: hold Tab, or automatically while dead.
-        const bool* kb = SDL_GetKeyboardState(nullptr);
-        if (kb[SDL_SCANCODE_TAB] || (haveServerState && !pred.alive)) {
+        if (boardShown) {
             struct Row {
                 uint8_t id;
                 PlayerClass cls;
-                int kills, deaths, ping;
+                int score, kills, deaths, ping, streak;
             };
-            std::vector<Row> rows = {{myId, opt.cls, myKills, myDeaths, myPing}};
+            std::vector<Row> rows = {{myId, picking ? static_cast<PlayerClass>(NO_CLASS) : myCls, myScore, myKills,
+                                      myDeaths, myPing, myStreak}};
             for (const auto& [id, r] : remotes) {
                 if (r.samples.empty()) continue;
                 const NetPlayer& np = r.samples.back().p;
-                rows.push_back({id, static_cast<PlayerClass>(np.cls), np.kills, np.deaths, np.ping});
+                rows.push_back({id, static_cast<PlayerClass>(np.cls), np.score, np.kills, np.deaths, np.ping, np.streak});
             }
             std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
-                return a.kills != b.kills ? a.kills > b.kills : a.deaths < b.deaths;
+                return a.score != b.score ? a.score > b.score : a.deaths < b.deaths;
             });
-            const int pw = 250, px = (RETRO_W - pw) / 2, py = 40;
+            const int pw = 274, px = (RETRO_W - pw) / 2, py = 40;
             const int rowH = LINE_HEIGHT + 2;
             const int ph = 30 + static_cast<int>(rows.size()) * rowH;
             hud.rects.push_back({px, py, pw, ph, {0.03f, 0.02f, 0.02f, 0.75f}});
@@ -801,11 +1216,12 @@ int main(int argc, char** argv) {
             text(px + 6, py + 4, upper(mapName()), {1.0f, 0.8f, 0.45f});
             std::string count = std::to_string(rows.size()) + (rows.size() == 1 ? " PLAYER" : " PLAYERS");
             text(px + pw - 6 - textWidth(count), py + 4, count, glm::vec3(0.75f));
-            const int cName = px + 6, cClass = px + 108, cK = px + 166, cD = px + 190, cPing = px + 214;
+            const int cName = px + 6, cClass = px + 102, cPts = px + 172, cK = px + 200, cD = px + 222, cPing = px + 244;
             int y = py + 18;
             const glm::vec3 headC(0.6f);
             text(cName, y, "NAME", headC);
             text(cClass, y, "CLASS", headC);
+            text(cPts, y, "PTS", headC);
             text(cK, y, "K", headC);
             text(cD, y, "D", headC);
             text(cPing, y, "PING", headC);
@@ -813,12 +1229,57 @@ int main(int argc, char** argv) {
             for (const Row& r : rows) {
                 if (r.id == myId) hud.rects.push_back({px + 2, y - 2, pw - 4, rowH, glm::vec4(classColor(r.cls) * 0.35f, 0.6f)});
                 glm::vec3 c = r.id == myId ? glm::vec3(1.0f) : glm::vec3(0.85f);
-                text(cName, y, upper(nameOf(r.id)).substr(0, 16), c);
-                text(cClass, y, upper(classInfo(r.cls).name), classColor(r.cls));
+                std::string nm = upper(nameOf(r.id)).substr(0, 15);
+                text(cName, y, nm, c);
+                if (r.streak >= STREAK_BOUNTY_MIN)  // has a bounty
+                    text(cName + textWidth(nm) + 3, y, "*", {1.0f, 0.75f, 0.2f});
+                text(cPts, y, std::to_string(r.score), {1.0f, 0.85f, 0.5f});
+                if (r.cls < PlayerClass::Count) text(cClass, y, upper(classInfo(r.cls).name), classColor(r.cls));
+                else text(cClass, y, "PICKING", glm::vec3(0.55f));
                 text(cK, y, std::to_string(r.kills), c);
                 text(cD, y, std::to_string(r.deaths), c);
                 text(cPing, y, std::to_string(r.ping), r.ping > 150 ? glm::vec3(1.0f, 0.5f, 0.3f) : c);
                 y += rowH;
+            }
+        }
+
+        // Class picker: C to open, number keys to choose.
+        if (menuShown && haveServerState) {
+            const int n = static_cast<int>(PlayerClass::Count);
+            const int pw = 392, px = (RETRO_W - pw) / 2, rowH = LINE_HEIGHT + 3;
+            const int ph = 22 + n * rowH + 3 * LINE_HEIGHT + 6;
+            const int py = std::max(4, (RETRO_H - ph) / 2 - 10);
+            hud.rects.push_back({px, py, pw, ph, {0.03f, 0.02f, 0.02f, 0.82f}});
+            hud.rects.push_back({px, py, pw, 14, {0.25f, 0.12f, 0.05f, 0.9f}});
+            text(px + 6, py + 4, "CHOOSE YOUR CLASS", {1.0f, 0.8f, 0.45f});
+            int y = py + 20;
+            for (int i = 0; i < n; ++i) {
+                PlayerClass c = static_cast<PlayerClass>(i);
+                const ClassInfo& ci = classInfo(c);
+                bool current = !picking && c == myCls;
+                bool next = myNextCls == i;
+                if (current || next)
+                    hud.rects.push_back({px + 2, y - 2, pw - 4, rowH, glm::vec4(classColor(c) * 0.3f, 0.6f)});
+                text(px + 8, y, std::to_string(i + 1), glm::vec3(1.0f, 0.85f, 0.5f));
+                text(px + 22, y, upper(ci.name), classColor(c));
+                text(px + 94, y, std::to_string(static_cast<int>(ci.maxHp)) + " HP", glm::vec3(0.75f));
+                std::string abil;
+                for (int s = 0; s < NUM_ABILITY_SLOTS; ++s)
+                    abil += (s ? " / " : "") + upper(abilityInfo(ci.abilities[s]).name);
+                text(px + 138, y, abil, glm::vec3(0.85f));
+                if (current) text(px + pw - 6 - textWidth("NOW"), y, "NOW", glm::vec3(0.6f));
+                else if (next) text(px + pw - 6 - textWidth("NEXT"), y, "NEXT", glm::vec3(0.6f));
+                y += rowH;
+            }
+            y += 4;
+            text(px + 138, y - 2, "LMB / RMB / Q", glm::vec3(0.5f));
+            y += LINE_HEIGHT;
+            if (picking) {
+                text(px + 6, y, "PRESS 1-" + std::to_string(n) + " TO JOIN THE FIGHT", glm::vec3(0.8f));
+            } else {
+                text(px + 6, y, pred.alive ? "TAKES EFFECT WHEN YOU NEXT RESPAWN" : "YOU WILL RESPAWN AS YOUR PICK",
+                     glm::vec3(0.7f));
+                text(px + 6, y + LINE_HEIGHT, "C OR ESC TO CLOSE", glm::vec3(0.55f));
             }
         }
 

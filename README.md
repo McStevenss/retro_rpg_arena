@@ -11,25 +11,70 @@ cmake -S . -B build
 cmake --build build -j
 ```
 
+### Windows
+
+Either toolchain works; both link the runtime statically, so the resulting `.exe` files need no extra DLLs
+(only stock Windows 10/11 system libraries).
+
+Visual Studio 2022 / Build Tools:
+
+```sh
+cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64
+cmake --build build-msvc --config Release
+# -> build-msvc/Release/boyz_client.exe, boyz_server.exe, maps/
+```
+
+MSYS2 UCRT64 (MinGW-w64 GCC), from a shell with `C:\msys64\ucrt64\bin` on `PATH`:
+
+```sh
+cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-win
+# -> build-win/boyz_client.exe, boyz_server.exe, maps/
+```
+
+The `maps/` folder is copied next to the executables, so that folder can be zipped and given to
+other players as-is. Windows Firewall will ask to allow the server the first time it listens.
+
 ## Run
 
 ```sh
 ./build/boyz_server                       # UDP port 27960, map "arena"
 ./build/boyz_server --port 27961 --map arena
-./build/boyz_client --name alice --class mage
+./build/boyz_client --name alice              # pick a class in game
+./build/boyz_client --name carol --class mage # or skip the picker
 ./build/boyz_client --host 192.168.1.20 --name bob --class warrior
 ```
 
 Controls: WASD, mouse look, Space to jump, LMB primary ability, RMB secondary ability,
-Esc to release the mouse (Esc again to quit), F12 for a screenshot.
-Hold Tab for the scoreboard (it also opens while you are dead). Kills show in the top-right kill feed.
+Q third ability, Esc to release the mouse (Esc again to quit), F12 for a screenshot.
+Hold Tab for the scoreboard (it also opens while you are dead).
+Press C to change class (keys 1-6 pick). The switch happens when you die and respawn; if you're
+already dead you respawn as the new class. Without `--class` you spectate until you pick one. Kills show in the top-right kill feed.
 
-| Class   | HP  | LMB                                    | RMB                                  |
-|---------|-----|----------------------------------------|--------------------------------------|
-| warrior | 150 | sword swing (30, melee cone)           | charge (short dash, 5s cd)           |
-| mage    | 90  | fireball (26 + 14 splash)              | frostbolt (14, slows 50% for 2s)     |
-| druid   | 110 | thorns (11, very fast fire rate)       | regrowth (heal 50 over 5s, 10s cd)   |
-| healer  | 100 | holy bolt (19)                         | heal (40 instant, 8s cd)             |
+| Class   | HP  | LMB                                    | RMB                                  | Q                                              |
+|---------|-----|----------------------------------------|--------------------------------------|------------------------------------------------|
+| warrior | 150 | sword swing (30, melee cone)           | charge (short dash, 5s cd)           | war cry (8 to all within 6 m, slows 2.5s; 12s cd) |
+| mage    | 90  | fireball (26 + 14 splash)              | frostbolt (14, slows 50% for 2s)     | blink (8 m forward, 9s cd)                     |
+| druid   | 110 | thorns (11, very fast fire rate)       | regrowth (heal 50 over 5s, 10s cd)   | entangle (6, roots 1.75s; 11s cd)              |
+| healer  | 100 | holy bolt (19)                         | heal (40 instant, 8s cd)             | holy nova (16 to all within 5 m, heals you 15; 12s cd) |
+| rogue   | 95  | dagger (18, x3 backstab from behind)   | stealth (8s, 12s cd)                 | shadowstep (appear behind who you aim at, 14 m; 14s cd) |
+| necromancer | 100 | life drain (17, heals you 60% of it) | raise dead (skeleton minion, 16s cd) | bone burst (blow up your skeleton: 36, 3.5 m; 8s cd) |
+
+Stealth: you're invisible to enemies beyond 3.5 m (closer they see a faint shimmer) and move at 90%
+speed. Attacking or taking damage breaks it. The server doesn't send stealthed players' positions to
+clients that can't see them, so modified clients can't reveal them either.
+
+Raise dead: a skeleton (45 HP, lasts 20 s) chases the nearest enemy it can see and claws for 9.
+Otherwise it follows you. You can only have one, and it crumbles when you die. Its kills count as yours.
+
+Roots stop you walking, jumping, charging and blinking. Combos: a fireball that hits a slowed
+target (frostbolt, war cry) SHATTERs for x1.6, and a sword hit on a rooted target CRUSHes for x1.5;
+both use up the slow/root. Shadowstep doesn't break stealth, and only finds targets you could see.
+Shadowstep and bone burst cost nothing if there's no one to step to / no skeleton.
+
+Kill streaks are announced at 3, 5, 7, 10, ... kills without dying. From 3 on you carry a bounty
+(a gold light over your head, a * on the scoreboard): whoever kills you gets 1 extra point per
+kill of the streak past 2. The scoreboard ranks by points (kills + bounties).
 
 All numbers live in `src/shared/game.cpp` (`kAbilities`, `kClasses`).
 
@@ -76,7 +121,10 @@ maps/         map files
 
 The world renders into a 400x225 framebuffer that's upscaled with nearest filtering.
 The shader adds flat per-face shading, dark distance fog and ordered-dither colour quantisation.
-Players are camera-facing billboard sprites, tinted by class.
+Players are camera-facing billboard sprites, tinted by class, with 8 viewing directions (5 drawn,
+3 mirrored) and a walk cycle. Dead players collapse and leave a body for a while (skeletons a heap
+of bones). Your hits show floating damage numbers; melee hits briefly freeze the swing, and big
+hits and explosions shake the camera. Slowed players look icy blue, rooted ones green.
 
 Dynamic lighting: flickering wall torches, projectiles (with glowing trails), impacts, heals and
 spell casts are point lights (the 32 nearest the camera each frame), lit per pixel with surface normals so light doesn't bleed through walls.

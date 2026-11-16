@@ -36,25 +36,58 @@ AbilityInfo timed(const char* name, AbilityKind kind, float cdSec, float amount,
     return a;
 }
 
+AbilityInfo withBackstab(AbilityInfo a, float mult) { a.backstabMult = mult; return a; }
+AbilityInfo withLifesteal(AbilityInfo a, float frac) { a.lifesteal = frac; return a; }
+AbilityInfo withCombo(AbilityInfo a, ComboOn on, float mult, const char* name) {
+    a.comboOn = on; a.comboMult = mult; a.comboName = name;
+    return a;
+}
+AbilityInfo withRoot(AbilityInfo a, float sec) { a.rootTicks = static_cast<uint16_t>(sec * TICK_RATE); return a; }
+AbilityInfo withSlow(AbilityInfo a, float sec) { a.slowTicks = static_cast<uint16_t>(sec * TICK_RATE); return a; }
+AbilityInfo withRange(AbilityInfo a, float r) { a.range = r; return a; }
+
 // Balance lives here. Indexed by AbilityId.
 const AbilityInfo kAbilities[] = {
-    melee("sword", 0.6f, 30, 2.6f, 0.55f),
+    withCombo(melee("sword", 0.6f, 30, 2.6f, 0.55f), COMBO_ROOTED, 1.5f, "CRUSH"),
     timed("charge", AbilityKind::Dash, 5.0f, 0, 0.2f),
-    projectile("fireball", 0.9f, 26, 20, 0.25f, 2.2f, 14),
+    withCombo(projectile("fireball", 0.9f, 26, 20, 0.25f, 2.2f, 14), COMBO_SLOWED, 1.6f, "SHATTER"),
     projectile("frostbolt", 2.5f, 14, 28, 0.18f, 0, 0, 2.0f),
     projectile("thorns", 0.35f, 11, 36, 0.1f),
     timed("regrowth", AbilityKind::HealOverTime, 10.0f, 50, 5.0f),
     projectile("holy bolt", 0.7f, 19, 26, 0.18f),
     timed("heal", AbilityKind::SelfHeal, 8.0f, 40, 0),
+    withBackstab(melee("dagger", 0.45f, 18, 2.3f, 0.6f), 3.0f),
+    timed("stealth", AbilityKind::Stealth, 12.0f, 0, 8.0f),
+    withLifesteal(projectile("life drain", 0.8f, 17, 22, 0.2f), 0.6f),
+    timed("raise dead", AbilityKind::Summon, 16.0f, 0, 0),
+    // Q abilities.
+    withSlow(melee("war cry", 12.0f, 8, 6.0f, -1.0f), 2.5f),
+    withRange(timed("blink", AbilityKind::Blink, 9.0f, 0, 0), 8.0f),
+    withRoot(projectile("entangle", 11.0f, 6, 24, 0.3f), 1.75f),
+    [] {
+        AbilityInfo a = withRange(timed("holy nova", AbilityKind::Nova, 12.0f, 16, 0), 5.0f);
+        a.selfHeal = 15;
+        return a;
+    }(),
+    [] {
+        AbilityInfo a = withRange(timed("shadowstep", AbilityKind::Shadowstep, 14.0f, 0, 0), 14.0f);
+        a.keepsStealth = true;
+        return a;
+    }(),
+    withRange(timed("bone burst", AbilityKind::Detonate, 8.0f, 36, 0), 3.5f),
+    melee("skeleton", 1.0f, 9, 1.7f, 0.3f),
 };
 static_assert(sizeof(kAbilities) / sizeof(kAbilities[0]) == static_cast<size_t>(AbilityId::Count));
 
 const ClassInfo kClasses[] = {
-    {"warrior", 150.0f, 6.0f, {AbilityId::SwordSwing, AbilityId::Charge}},
-    {"mage", 90.0f, 6.5f, {AbilityId::Fireball, AbilityId::FrostBolt}},
-    {"druid", 110.0f, 7.0f, {AbilityId::Thorns, AbilityId::Regrowth}},
-    {"healer", 100.0f, 6.5f, {AbilityId::HolyBolt, AbilityId::Heal}},
+    {"warrior", 150.0f, 6.0f, {AbilityId::SwordSwing, AbilityId::Charge, AbilityId::WarCry}},
+    {"mage", 90.0f, 6.5f, {AbilityId::Fireball, AbilityId::FrostBolt, AbilityId::Blink}},
+    {"druid", 110.0f, 7.0f, {AbilityId::Thorns, AbilityId::Regrowth, AbilityId::Entangle}},
+    {"healer", 100.0f, 6.5f, {AbilityId::HolyBolt, AbilityId::Heal, AbilityId::HolyNova}},
+    {"rogue", 95.0f, 7.0f, {AbilityId::Dagger, AbilityId::Stealth, AbilityId::Shadowstep}},
+    {"necromancer", 100.0f, 6.3f, {AbilityId::LifeDrain, AbilityId::RaiseDead, AbilityId::BoneBurst}},
 };
+static_assert(sizeof(kClasses) / sizeof(kClasses[0]) == static_cast<size_t>(PlayerClass::Count));
 
 }  // namespace
 
@@ -81,6 +114,14 @@ bool parseClass(const char* s, PlayerClass& out) {
         }
     }
     return false;
+}
+
+bool isBehind(float vx, float vz, float victimYaw, float ax, float az) {
+    float dx = ax - vx, dz = az - vz;
+    float d = std::sqrt(dx * dx + dz * dz);
+    if (d < 1e-3f) return false;
+    float fx = std::sin(victimYaw), fz = -std::cos(victimYaw);
+    return (dx * fx + dz * fz) / d < BACKSTAB_DOT;
 }
 
 void viewDir(float yaw, float pitch, float& dx, float& dy, float& dz) {
@@ -164,51 +205,81 @@ bool moveHorizontal(PlayerState& s, float dx, float dz) {
 
 }  // namespace
 
+bool spaceFree(float x, float y, float z) { return !boxBlocked(x, z, y, y + PLAYER_HEIGHT); }
+
 uint8_t simulate(PlayerState& s, const InputCmd& in, PlayerClass cls, float dt) {
     const ClassInfo& ci = classInfo(cls);
     for (auto& cd : s.cooldown)
         if (cd) --cd;
+    if (s.stealthTicks) --s.stealthTicks;
+
+    uint8_t fired = 0;
+    if (s.alive) {
+        static const uint8_t kSlotButton[NUM_ABILITY_SLOTS] = {BTN_PRIMARY, BTN_SECONDARY, BTN_TERTIARY};
+        for (int slot = 0; slot < NUM_ABILITY_SLOTS; ++slot) {
+            if (!(in.buttons & kSlotButton[slot]) || s.cooldown[slot] != 0) continue;
+            const AbilityInfo& ab = abilityInfo(ci.abilities[slot]);
+            // Stealth can't be recast while already stealthed.
+            if (ab.kind == AbilityKind::Stealth && s.stealthTicks) continue;
+            // Roots stop every kind of movement ability.
+            if (s.rootTicks && (ab.kind == AbilityKind::Dash || ab.kind == AbilityKind::Blink)) continue;
+            s.cooldown[slot] = ab.cooldownTicks;
+            fired |= static_cast<uint8_t>(1 << slot);
+            if (ab.kind == AbilityKind::Dash) s.dashTicks = ab.durationTicks;
+            if (ab.kind == AbilityKind::Blink) {
+                // Small steps so walls stop it and it can step up ledges.
+                const int STEPS = 16;
+                const float fx = std::sin(in.yaw), fz = -std::cos(in.yaw);
+                for (int i = 0; i < STEPS; ++i)
+                    if (moveHorizontal(s, fx * ab.range / STEPS, 0) | moveHorizontal(s, 0, fz * ab.range / STEPS)) break;
+                s.vy = std::max(s.vy, 0.0f);
+            }
+            // Any other action breaks stealth.
+            if (ab.kind == AbilityKind::Stealth) s.stealthTicks = ab.durationTicks;
+            else if (!ab.keepsStealth) s.stealthTicks = 0;
+        }
+    } else {
+        s.stealthTicks = 0;
+    }
+    float speed = ci.moveSpeed * (s.stealthTicks ? STEALTH_SPEED_MULT : 1.0f);
+    simulateMove(s, in, speed, dt);
+    return fired;
+}
+
+void simulateMove(PlayerState& s, const InputCmd& in, float speed, float dt) {
     if (s.slowTicks) --s.slowTicks;
+    if (s.rootTicks) --s.rootTicks;
 
     s.yaw = in.yaw;
     s.pitch = std::clamp(in.pitch, -1.5f, 1.5f);
     const float fx = std::sin(s.yaw), fz = -std::cos(s.yaw);
     const float rx = std::cos(s.yaw), rz = std::sin(s.yaw);
 
-    uint8_t fired = 0;
     float wx = 0, wz = 0;
     if (s.alive) {
-        static const uint8_t kSlotButton[NUM_ABILITY_SLOTS] = {BTN_PRIMARY, BTN_SECONDARY};
-        for (int slot = 0; slot < NUM_ABILITY_SLOTS; ++slot) {
-            if (!(in.buttons & kSlotButton[slot]) || s.cooldown[slot] != 0) continue;
-            const AbilityInfo& ab = abilityInfo(ci.abilities[slot]);
-            s.cooldown[slot] = ab.cooldownTicks;
-            fired |= static_cast<uint8_t>(1 << slot);
-            if (ab.kind == AbilityKind::Dash) s.dashTicks = ab.durationTicks;
-        }
-
         float f = static_cast<float>(std::clamp<int>(in.forward, -1, 1));
         float st = static_cast<float>(std::clamp<int>(in.strafe, -1, 1));
         wx = fx * f + rx * st;
         wz = fz * f + rz * st;
         float len = std::sqrt(wx * wx + wz * wz);
         if (len > 1e-3f) { wx /= len; wz /= len; }
-        float speed = ci.moveSpeed * (s.slowTicks ? SLOW_MULT : 1.0f);
-        wx *= speed;
-        wz *= speed;
+        float sp = s.rootTicks ? 0.0f : speed * (s.slowTicks ? SLOW_MULT : 1.0f);
+        wx *= sp;
+        wz *= sp;
     } else {
         s.dashTicks = 0;
     }
 
+    if (s.rootTicks) s.dashTicks = 0;
     if (s.dashTicks) {
         --s.dashTicks;
-        float sp = ci.moveSpeed * DASH_SPEED_MULT;
+        float sp = speed * DASH_SPEED_MULT;
         s.vx = fx * sp;
         s.vz = fz * sp;
     } else if (s.onGround) {
         s.vx = wx;
         s.vz = wz;
-        if (s.alive && (in.buttons & BTN_JUMP)) {
+        if (s.alive && !s.rootTicks && (in.buttons & BTN_JUMP)) {
             s.vy = JUMP_VEL;
             s.onGround = 0;
         }
@@ -249,7 +320,6 @@ uint8_t simulate(PlayerState& s, const InputCmd& in, PlayerClass cls, float dt) 
         }
         s.onGround = 0;
     }
-    return fired;
 }
 
 }  // namespace game

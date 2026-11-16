@@ -54,6 +54,7 @@ uniform float uFogStart;
 uniform float uFogEnd;
 uniform float uFogScale;  // 0 = no fog (HUD overlays)
 uniform float uAlpha;     // < 1 only for blended overlays
+uniform float uStipple;   // < 1 = screen-door transparency (keeps this fraction of pixels)
 const int MAX_LIGHTS = 32;
 uniform int uLightCount;
 uniform vec4 uLightPos[MAX_LIGHTS];    // xyz = position, w = radius
@@ -67,6 +68,8 @@ const float bayer[16] = float[16](0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1.
 void main() {
     vec4 c = texture(uTex, vUV);
     if (c.a < 0.5) discard;
+    int idx = (int(gl_FragCoord.x) & 3) + (int(gl_FragCoord.y) & 3) * 4;
+    if (bayer[idx] / 16.0 >= uStipple) discard;
     float tintMask = c.a < 0.9 ? 1.0 : 0.0;
     vec3 base = mix(c.rgb, c.rgb * uTint, tintMask);
     vec3 light;
@@ -94,7 +97,6 @@ void main() {
     vec3 col = base * light;
     float fog = clamp((vDist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0) * uFogScale;
     col = mix(col, uFogColor, fog);
-    int idx = (int(gl_FragCoord.x) & 3) + (int(gl_FragCoord.y) & 3) * 4;
     float d = (bayer[idx] / 16.0 - 0.5) / LEVELS;
     col = floor((col + d) * LEVELS + 0.5) / LEVELS;
     fragColor = vec4(col, uAlpha);
@@ -177,6 +179,14 @@ void setupVertexLayout() {
 
 }  // namespace
 
+glm::mat4 cameraViewProj(const Camera& cam, float aspect) {
+    glm::vec3 dir(std::sin(cam.yaw) * std::cos(cam.pitch), std::sin(cam.pitch),
+                  -std::cos(cam.yaw) * std::cos(cam.pitch));
+    glm::mat4 proj = glm::perspective(glm::radians(70.0f), aspect, 0.05f, 100.0f);
+    glm::mat4 view = glm::lookAt(cam.eye, cam.eye + dir, glm::vec3(0, 1, 0));
+    return proj * view;
+}
+
 bool Renderer::init(int internalW, int internalH) {
     w_ = internalW;
     h_ = internalH;
@@ -191,6 +201,7 @@ bool Renderer::init(int internalW, int internalH) {
     uFogEnd_ = glGetUniformLocation(prog_, "uFogEnd");
     uFogScale_ = glGetUniformLocation(prog_, "uFogScale");
     uAlpha_ = glGetUniformLocation(prog_, "uAlpha");
+    uStipple_ = glGetUniformLocation(prog_, "uStipple");
     uLightCount_ = glGetUniformLocation(prog_, "uLightCount");
     uLightPos_ = glGetUniformLocation(prog_, "uLightPos");
     uLightColor_ = glGetUniformLocation(prog_, "uLightColor");
@@ -222,9 +233,13 @@ bool Renderer::init(int internalW, int internalH) {
     texWall_ = makeTexture(makeStoneWall(), true);
     texFloor_ = makeTexture(makeFlagstoneFloor(), true);
     texCeil_ = makeTexture(makeWoodCeiling(), true);
-    texPlayer_ = makeTexture(makePlayerSprite(), false);
+    texPlayer_ = makeTexture(makePlayerSheet(), false);
     texOrb_ = makeTexture(makeOrbSprite(), false);
     texSword_ = makeTexture(makeSwordSprite(), false);
+    texDagger_ = makeTexture(makeDaggerSprite(), false);
+    texSkeleton_ = makeTexture(makeSkeletonSheet(), false);
+    texPlayerCorpse_ = makeTexture(makePlayerCorpse(), false);
+    texSkeletonCorpse_ = makeTexture(makeSkeletonCorpse(), false);
     texStaff_ = makeTexture(makeStaffSprite(), false);
     texWhite_ = makeTexture(makeWhite(), false);
     texTorch_ = makeTexture(makeTorchSprite(), false);
@@ -383,6 +398,18 @@ void Renderer::fillRect(int x, int y, int w, int h, float r, float g, float b) {
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
+// uv0 = top-left texture coordinate, uv1 = bottom-right.
+void Renderer::drawQuadUV(glm::vec3 tl, glm::vec3 tr, glm::vec3 br, glm::vec3 bl, glm::vec2 uv0, glm::vec2 uv1,
+                          float shade) {
+    std::vector<float> v;
+    v.reserve(6 * VERT_FLOATS);
+    const glm::vec3 p[4] = {tl, tr, br, bl};
+    const glm::vec2 uv[4] = {{uv0.x, uv0.y}, {uv1.x, uv0.y}, {uv1.x, uv1.y}, {uv0.x, uv1.y}};
+    addQuadUV(v, p, uv, shade, glm::vec3(0));
+    glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(v.size() * sizeof(float)), v.data());
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
 void Renderer::drawQuad(glm::vec3 tl, glm::vec3 tr, glm::vec3 br, glm::vec3 bl, float shade) {
     std::vector<float> v;
     v.reserve(6 * VERT_FLOATS);
@@ -431,11 +458,7 @@ void Renderer::renderFrame(const Camera& cam, const std::vector<Billboard>& bill
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
 
-    glm::vec3 dir(std::sin(cam.yaw) * std::cos(cam.pitch), std::sin(cam.pitch),
-                  -std::cos(cam.yaw) * std::cos(cam.pitch));
-    glm::mat4 proj = glm::perspective(glm::radians(70.0f), static_cast<float>(w_) / h_, 0.05f, 100.0f);
-    glm::mat4 view = glm::lookAt(cam.eye, cam.eye + dir, glm::vec3(0, 1, 0));
-    glm::mat4 vp = proj * view;
+    glm::mat4 vp = cameraViewProj(cam, static_cast<float>(w_) / h_);
 
     glUseProgram(prog_);
     glUniformMatrix4fv(uViewProj_, 1, GL_FALSE, glm::value_ptr(vp));
@@ -446,6 +469,7 @@ void Renderer::renderFrame(const Camera& cam, const std::vector<Billboard>& bill
     glUniform1f(uFogEnd_, 42.0f);
     glUniform1f(uFogScale_, 1.0f);
     glUniform1f(uAlpha_, 1.0f);
+    glUniform1f(uStipple_, 1.0f);
     glUniform1f(uAmbient_, 0.72f);
     setEmissive(false);
 
@@ -482,13 +506,24 @@ void Renderer::renderFrame(const Camera& cam, const std::vector<Billboard>& bill
     glDrawArrays(GL_TRIANGLES, ceilFirst_, ceilCount_);
 
     // Billboards: always face the camera around the Y axis (Daggerfall style).
-    // TODO: 8-directional sprite frames chosen from (camera angle - player yaw).
+    // Characters show one of 8 views depending on which way they face.
     glBindVertexArray(spriteVao_);
     glBindBuffer(GL_ARRAY_BUFFER, spriteVbo_);
     const glm::vec3 right(std::cos(cam.yaw), 0, std::sin(cam.yaw));
     for (const Billboard& b : billboards) {
-        glBindTexture(GL_TEXTURE_2D, b.tex == SpriteTex::Player ? texPlayer_ : b.tex == SpriteTex::Orb ? texOrb_ : texTorch_);
-        setEmissive(b.tex != SpriteTex::Player);  // glows and torches are light sources themselves
+        unsigned tex = texTorch_;
+        switch (b.tex) {
+            case SpriteTex::Player: tex = texPlayer_; break;
+            case SpriteTex::Orb: tex = texOrb_; break;
+            case SpriteTex::Torch: tex = texTorch_; break;
+            case SpriteTex::Skeleton: tex = texSkeleton_; break;
+            case SpriteTex::PlayerCorpse: tex = texPlayerCorpse_; break;
+            case SpriteTex::SkeletonCorpse: tex = texSkeletonCorpse_; break;
+        }
+        glBindTexture(GL_TEXTURE_2D, tex);
+        // Glows and torches are light sources themselves.
+        setEmissive(b.tex == SpriteTex::Orb || b.tex == SpriteTex::Torch);
+        glUniform1f(uStipple_, b.opacity);
         glUniform3f(uTint_, b.tint.r, b.tint.g, b.tint.b);
         glm::vec3 base = b.base;
         if (b.tex == SpriteTex::Orb) {
@@ -499,8 +534,28 @@ void Renderer::renderFrame(const Camera& cam, const std::vector<Billboard>& bill
         }
         glm::vec3 l = base - right * (b.width * 0.5f), r = base + right * (b.width * 0.5f);
         glm::vec3 up(0, b.height, 0);
-        drawQuad(l + up, r + up, r, l, b.brightness);
+        if (!b.directional) {
+            drawQuad(l + up, r + up, r, l, b.brightness);
+            continue;
+        }
+        // Angle between where they face and the direction to the camera:
+        // 0 = facing us (front view), pi = facing away (back view).
+        glm::vec2 facing(std::sin(b.facingYaw), -std::cos(b.facingYaw));
+        glm::vec2 toCam(cam.eye.x - b.base.x, cam.eye.z - b.base.z);
+        float len = glm::length(toCam);
+        toCam = len > 1e-4f ? toCam / len : glm::vec2(-facing);
+        float cross = facing.x * toCam.y - facing.y * toCam.x;
+        float angle = std::atan2(std::fabs(cross), glm::dot(facing, toCam));
+        int sheetView = std::clamp(static_cast<int>(std::lround(angle / (3.14159265f / 4))), 0, SPRITE_VIEWS - 1);
+        // Turned views are drawn facing screen-left; mirror if they face right.
+        bool mirror = sheetView != 0 && sheetView != SPRITE_VIEWS - 1 && facing.x * right.x + facing.y * right.z > 0;
+        float u0 = static_cast<float>(sheetView) / SPRITE_VIEWS, u1 = static_cast<float>(sheetView + 1) / SPRITE_VIEWS;
+        if (mirror) std::swap(u0, u1);
+        int frame = std::clamp(b.frame, 0, SPRITE_FRAMES - 1);
+        float v0 = static_cast<float>(frame) / SPRITE_FRAMES, v1 = static_cast<float>(frame + 1) / SPRITE_FRAMES;
+        drawQuadUV(l + up, r + up, r, l, {u0, v0}, {u1, v1}, b.brightness);
     }
+    glUniform1f(uStipple_, 1.0f);
 
     drawHud(hud);
     glBindVertexArray(0);
@@ -520,10 +575,14 @@ void Renderer::drawHud(const Hud& hud) {
         glm::vec2 pivot(w_ * 0.72f + hud.weaponOffset.x, -12.0f + hud.weaponOffset.y);
         float c = std::cos(hud.weaponAngle), s = std::sin(hud.weaponAngle);
         auto P = [&](float x, float y) { return glm::vec3(pivot.x + x * c - y * s, pivot.y + x * s + y * c, 0); };
-        glBindTexture(GL_TEXTURE_2D, hud.weapon == WeaponTex::Sword ? texSword_ : texStaff_);
+        glBindTexture(GL_TEXTURE_2D, hud.weapon == WeaponTex::Sword    ? texSword_
+                                     : hud.weapon == WeaponTex::Dagger ? texDagger_
+                                                                       : texStaff_);
         glm::vec3 tint = hud.classColor * hud.weaponGlow;
         glUniform3f(uTint_, tint.r, tint.g, tint.b);
+        glUniform1f(uStipple_, hud.weaponOpacity);
         drawQuad(P(-hw, hgt), P(hw, hgt), P(hw, 0), P(-hw, 0), 1.0f);
+        glUniform1f(uStipple_, 1.0f);
     }
 
     if (hud.flash.a > 0.0f) {
@@ -565,6 +624,7 @@ void Renderer::drawHud(const Hud& hud) {
     }
 
     // Pixel-exact HUD bits drawn with scissored clears.
+    if (!hud.showStatus) return;
     glEnable(GL_SCISSOR_TEST);
     int cx = w_ / 2, cy = h_ / 2;
     fillRect(cx - 3, cy, 7, 1, 0.9f, 0.85f, 0.7f);
@@ -583,10 +643,10 @@ void Renderer::drawHud(const Hud& hud) {
     int fill = static_cast<int>(barW * std::clamp(hud.hpFrac, 0.0f, 1.0f));
     if (fill > 0) fillRect(7, 7, fill, barH, 0.75f, 0.1f, 0.08f);
 
-    // Ability cooldowns: two squares bottom-centre that fill up as they recharge.
-    const int box = 12;
-    for (int slot = 0; slot < 2; ++slot) {
-        int x = cx - box - 2 + slot * (box + 4), y = 6;
+    // Ability cooldowns: squares bottom-centre (LMB, RMB, Q) that fill up as they recharge.
+    const int box = 12, slots = 3;
+    for (int slot = 0; slot < slots; ++slot) {
+        int x = cx - (slots * (box + 4) - 4) / 2 + slot * (box + 4), y = 6;
         float r = std::clamp(hud.ready[slot], 0.0f, 1.0f);
         fillRect(x - 1, y - 1, box + 2, box + 2, 0.1f, 0.08f, 0.06f);
         glm::vec3 c = hud.classColor * (r >= 1.0f ? 1.0f : 0.35f);
@@ -625,7 +685,9 @@ bool Renderer::saveScreenshot(const char* path) {
 }
 
 void Renderer::shutdown() {
-    GLuint texs[] = {texWall_, texFloor_, texCeil_, texPlayer_, texOrb_, texSword_, texStaff_, texWhite_, texTorch_, texFont_, fboColor_};
+    GLuint texs[] = {texWall_,  texFloor_, texCeil_,  texPlayer_, texSkeleton_, texPlayerCorpse_, texSkeletonCorpse_,
+                     texDagger_, texOrb_,  texSword_, texStaff_, texWhite_,  texTorch_,    texFont_,
+                     fboColor_};
     glDeleteTextures(sizeof(texs) / sizeof(texs[0]), texs);
     glDeleteRenderbuffers(1, &fboDepth_);
     glDeleteFramebuffers(1, &fbo_);

@@ -10,6 +10,13 @@ endif()
 # Lets old third-party CMakeLists (ENet) configure on newer CMake versions.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
+# Windows: link the C/C++ runtime statically so the .exe files run without extra DLLs.
+# (Must be set before the dependencies below are configured.)
+if(MINGW)
+  add_link_options(-static -static-libgcc -static-libstdc++)
+endif()
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 include(FetchContent)
 
 # --- Dependencies -----------------------------------------------------------
@@ -34,12 +41,18 @@ FetchContent_Declare(glm
 FetchContent_MakeAvailable(SDL3 enet glm)
 target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
 if(WIN32)
-  target_link_libraries(enet PUBLIC ws2_32 winmm)
+  # Plain signature: ENet's own CMakeLists already uses it (and only links these on MinGW).
+  target_link_libraries(enet ws2_32 winmm)
 endif()
 
 find_package(OpenGL REQUIRED)
 
+if(WIN32)
+  # windows.h (pulled in by enet.h) otherwise defines min/max macros that break std::min.
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 if(MSVC)
+  add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
   set(WARN /W4)
 else()
   set(WARN -Wall -Wextra)
@@ -67,3 +80,7 @@ add_executable(boyz_client
   src/client/font.cpp)
 target_link_libraries(boyz_client PRIVATE boyz_shared enet SDL3::SDL3 glm::glm OpenGL::GL)
 target_compile_options(boyz_client PRIVATE ${WARN})
+
+# Copy maps next to the executables so the build folder can be zipped and shared.
+add_custom_target(copy_maps ALL
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/maps $<TARGET_FILE_DIR:boyz_server>/maps)

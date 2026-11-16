@@ -7,6 +7,10 @@
 #include <sstream>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>  // GetModuleFileNameW (NOMINMAX/WIN32_LEAN_AND_MEAN set in CMake)
+#endif
+
 #include "game.h"
 
 namespace game {
@@ -232,8 +236,15 @@ std::string findMapFile(const std::string& nameOrPath, const char* argv0) {
 
     const std::string file = nameOrPath + ".map";
     std::vector<fs::path> dirs = {"maps"};
-    fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-    if (ec && argv0) exe = fs::absolute(argv0, ec);
+    fs::path exe;
+#ifdef _WIN32
+    wchar_t buf[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) exe = fs::path(buf, buf + len);
+#else
+    exe = fs::read_symlink("/proc/self/exe", ec);
+#endif
+    if (exe.empty() && argv0) exe = fs::absolute(argv0, ec);
     if (!exe.empty()) {
         dirs.push_back(exe.parent_path() / "maps");
         dirs.push_back(exe.parent_path().parent_path() / "maps");
